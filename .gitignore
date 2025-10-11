@@ -122,6 +122,9 @@ models/
 .DS_Store
 *.iml
 
+# Claude Code
+.claude/
+
 # PyCharm
 .idea/
 *.iml
