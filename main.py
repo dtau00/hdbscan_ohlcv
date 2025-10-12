@@ -342,11 +342,15 @@ def print_summary_report(storage: ResultsStorage, logger: logging.Logger) -> Non
         logger.error(f"Error generating summary report: {e}", exc_info=True)
 
 
-def main():
+def main(use_parallel: bool = True, n_jobs: int = -1):
     """
     Main orchestration function.
 
     Coordinates the entire hyperparameter tuning pipeline.
+
+    Args:
+        use_parallel: Enable parallel execution (default: True)
+        n_jobs: Number of parallel jobs (-1 = all cores, default: -1)
     """
     # Step 1: Setup
     logger = setup_logging()
@@ -393,36 +397,61 @@ def main():
     logger.info("STEP 4: MAIN PROCESSING LOOP")
     logger.info("="*80)
 
-    # Cache for StandardScalers (one per window_size)
-    scalers_cache = {}
-
     # Track results
     results = []
     successful = 0
     failed = 0
 
-    # Progress bar
-    for i, config in enumerate(tqdm(configs, desc="Processing configs", unit="config"), 1):
-        logger.info(f"\n{'─'*80}")
-        logger.info(f"Processing configuration {i}/{len(configs)}")
-        logger.info(f"{'─'*80}")
+    if use_parallel:
+        # Parallel execution
+        from src.parallel_grid_search import parallel_grid_search, get_optimal_n_jobs
 
-        result = process_single_config(
-            config=config,
+        n_jobs_actual = get_optimal_n_jobs(n_jobs)
+        logger.info(f"Using parallel execution with {n_jobs_actual} workers")
+
+        results = parallel_grid_search(
+            configs=configs,
             df_ohlcv=df_ohlcv,
             backend_type=backend_type,
             backend_module=backend_module,
             storage=storage,
-            logger=logger,
-            scalers_cache=scalers_cache
+            process_func=process_single_config,
+            n_jobs=n_jobs,
+            verbose=10
         )
 
-        results.append(result)
+        # Count successes and failures
+        successful = sum(1 for r in results if r['success'])
+        failed = len(results) - successful
+    else:
+        # Sequential execution
+        logger.info("Using sequential execution")
 
-        if result['success']:
-            successful += 1
-        else:
-            failed += 1
+        # Cache for StandardScalers (one per window_size)
+        scalers_cache = {}
+
+        # Progress bar
+        for i, config in enumerate(tqdm(configs, desc="Processing configs", unit="config"), 1):
+            logger.info(f"\n{'─'*80}")
+            logger.info(f"Processing configuration {i}/{len(configs)}")
+            logger.info(f"{'─'*80}")
+
+            result = process_single_config(
+                config=config,
+                df_ohlcv=df_ohlcv,
+                backend_type=backend_type,
+                backend_module=backend_module,
+                storage=storage,
+                logger=logger,
+                scalers_cache=scalers_cache
+            )
+
+            results.append(result)
+
+            if result['success']:
+                successful += 1
+            else:
+                failed += 1
 
     # Step 5: Summary
     logger.info("\n" + "="*80)
@@ -459,8 +488,45 @@ def main():
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="HDBSCAN OHLCV Pattern Discovery - Hyperparameter Grid Search",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run with parallel execution using all cores (default)
+  python main.py
+
+  # Run with sequential execution
+  python main.py --no-parallel
+
+  # Run with 4 parallel workers
+  python main.py --n-jobs 4
+
+  # Run with half the available cores
+  python main.py --n-jobs -2
+        """
+    )
+
+    parser.add_argument(
+        '--no-parallel',
+        action='store_true',
+        help='Disable parallel execution (run sequentially)'
+    )
+
+    parser.add_argument(
+        '--n-jobs',
+        type=int,
+        default=-1,
+        help='Number of parallel jobs. -1 = all cores (default), -N = all except N cores, N = use N cores'
+    )
+
+    args = parser.parse_args()
+
     try:
-        exit_code = main()
+        use_parallel = not args.no_parallel
+        exit_code = main(use_parallel=use_parallel, n_jobs=args.n_jobs)
         sys.exit(exit_code)
     except KeyboardInterrupt:
         print("\n\nInterrupted by user. Exiting...")

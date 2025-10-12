@@ -157,7 +157,7 @@ def show_dashboard():
             ['run_id', 'config_id', 'n_clusters', 'silhouette_score', 'noise_ratio', 'timestamp']
         ].copy()
         recent_df['timestamp'] = pd.to_datetime(recent_df['timestamp']).dt.strftime('%Y-%m-%d %H:%M')
-        st.dataframe(recent_df, use_container_width=True, hide_index=True)
+        st.dataframe(recent_df, width='stretch', hide_index=True)
 
     with col2:
         st.subheader("\U0001F3C6 Top Performers")
@@ -165,7 +165,7 @@ def show_dashboard():
             top_df = df.nlargest(5, 'silhouette_score')[
                 ['run_id', 'config_id', 'silhouette_score']
             ].copy()
-            st.dataframe(top_df, use_container_width=True, hide_index=True)
+            st.dataframe(top_df, width='stretch', hide_index=True)
         else:
             st.info("No quality metrics available yet.")
 
@@ -191,7 +191,7 @@ def show_dashboard():
             height=400
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     # Configuration distribution
     col1, col2 = st.columns(2)
@@ -207,7 +207,7 @@ def show_dashboard():
             color_continuous_scale='Blues'
         )
         fig.update_layout(showlegend=False, height=300)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     with col2:
         st.subheader("\U0001F4CA Cluster Distribution")
@@ -220,7 +220,7 @@ def show_dashboard():
             color_continuous_scale='Greens'
         )
         fig.update_layout(showlegend=False, height=300)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
 
 def show_configure_run():
@@ -334,6 +334,34 @@ def show_configure_run():
             help="Total bars to use for all grid search runs. Same dataset will be used for all configurations."
         )
 
+        # Parallel execution settings
+        st.markdown("### \u26A1 Parallel Execution")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            use_parallel = st.checkbox(
+                "Enable Parallel Execution",
+                value=True,
+                help="Run grid search configurations in parallel using multiple CPU cores for faster execution. Note: Parallel mode uses CPU-only (GPU acceleration is only available in sequential mode)."
+            )
+
+            if use_parallel and st.session_state.backend_type == 'gpu':
+                st.info("ℹ️ Parallel execution will use CPU-only mode (CUDA contexts cannot be shared across processes)")
+
+        with col2:
+            if use_parallel:
+                import multiprocessing
+                cpu_count = multiprocessing.cpu_count()
+                default_jobs = min(cpu_count, 24)
+                n_jobs = st.number_input(
+                    "Number of Parallel Jobs",
+                    1, 24, default_jobs,
+                    key="n_jobs",
+                    help=f"Number of CPU cores to use (max 24). System has {cpu_count} cores."
+                )
+            else:
+                n_jobs = 1
+
         # Calculate total configs
         total_configs = len(window_sizes) * len(min_cluster_sizes) * len(min_samples_options) * len(metrics_grid)
 
@@ -343,7 +371,7 @@ def show_configure_run():
         else:
             st.info(f"ℹ️ This will run **{total_configs}** configurations")
 
-        if st.button("▶ Run Grid Search", type="primary", use_container_width=True):
+        if st.button("▶ Run Grid Search", type="primary", width='stretch'):
             if data_files and not selected_file_names:
                 st.error("⚠️ Please select at least one data file!")
             else:
@@ -353,7 +381,9 @@ def show_configure_run():
                     min_samples_options=min_samples_options,
                     metrics=metrics_grid,
                     n_bars=n_bars_grid,
-                    selected_files=selected_file_names if data_files else None
+                    selected_files=selected_file_names if data_files else None,
+                    use_parallel=use_parallel,
+                    n_jobs=n_jobs if use_parallel else 1
                 )
 
     # Tab 2: Data Management
@@ -412,7 +442,7 @@ def show_configure_run():
             col1, col2 = st.columns([3, 1])
 
             with col1:
-                if st.button("\U0001F4E5 Download & Save Data", type="primary", use_container_width=True):
+                if st.button("\U0001F4E5 Download & Save Data", type="primary", width='stretch'):
                     download_from_yahoo(yf_ticker, yf_interval, yf_period, yf_run_immediately)
 
             with col2:
@@ -510,7 +540,7 @@ def show_configure_run():
                 )
 
             # Download button
-            if st.button("📥 Start Bulk Download", type="primary", use_container_width=True):
+            if st.button("📥 Start Bulk Download", type="primary", width='stretch'):
                 download_bulk_nas100(selected_tickers, bulk_interval, bulk_period, skip_errors, combine_data)
 
         st.markdown("---")
@@ -540,7 +570,7 @@ def show_configure_run():
         if uploaded_file is not None:
             df = pd.read_csv(uploaded_file)
             st.write("Preview:")
-            st.dataframe(df.head(), use_container_width=True)
+            st.dataframe(df.head(), width='stretch')
 
             if st.button("Save to Data Directory"):
                 save_path = Config.DATA_DIR / uploaded_file.name
@@ -653,10 +683,10 @@ def download_from_yahoo(ticker: str, interval: str, period: str, run_clustering:
             col1, col2 = st.columns(2)
             with col1:
                 st.write("First 5 rows:")
-                st.dataframe(data.head(), use_container_width=True)
+                st.dataframe(data.head(), width='stretch')
             with col2:
                 st.write("Last 5 rows:")
-                st.dataframe(data.tail(), use_container_width=True)
+                st.dataframe(data.tail(), width='stretch')
 
             # Display stats
             st.write("**Data Statistics:**")
@@ -812,7 +842,7 @@ def download_bulk_nas100(tickers, interval, period, skip_errors=True, combine_da
             st.markdown("**✅ Successful Downloads:**")
             success_df = pd.DataFrame(successful_downloads, columns=['Ticker', 'Bars'])
             success_df['Total Bars'] = success_df['Bars']
-            st.dataframe(success_df, use_container_width=True, hide_index=True)
+            st.dataframe(success_df, width='stretch', hide_index=True)
 
             total_bars = success_df['Bars'].sum()
             avg_bars = success_df['Bars'].mean()
@@ -823,7 +853,7 @@ def download_bulk_nas100(tickers, interval, period, skip_errors=True, combine_da
             st.markdown("**❌ Failed Downloads:**")
             with st.expander(f"Show {len(failed_downloads)} failed tickers"):
                 failed_df = pd.DataFrame(failed_downloads, columns=['Ticker', 'Error'])
-                st.dataframe(failed_df, use_container_width=True, hide_index=True)
+                st.dataframe(failed_df, width='stretch', hide_index=True)
 
         # Next steps
         if successful_downloads and not combine_data:
@@ -831,7 +861,7 @@ def download_bulk_nas100(tickers, interval, period, skip_errors=True, combine_da
             st.info("💡 Tip: Use the Grid Search tab to cluster individual ticker files.")
 
 
-def run_grid_search(window_sizes, min_cluster_sizes, min_samples_options, metrics, n_bars, selected_files=None):
+def run_grid_search(window_sizes, min_cluster_sizes, min_samples_options, metrics, n_bars, selected_files=None, use_parallel=False, n_jobs=1):
     """Run grid search with multiple configurations across multiple files."""
     import time
 
@@ -867,68 +897,108 @@ def run_grid_search(window_sizes, min_cluster_sizes, min_samples_options, metric
         # User selected specific files
         data_files = [Config.DATA_DIR / filename for filename in selected_files]
         total_runs = len(configs) * len(data_files)
-        st.info(f"Running {len(configs)} configurations on {len(data_files)} files = {total_runs} total runs...")
+        execution_mode = "parallel" if use_parallel else "sequential"
+        st.info(f"Running {len(configs)} configurations on {len(data_files)} files = {total_runs} total runs ({execution_mode}, {n_jobs} jobs)...")
     else:
         # No files selected, use synthetic data once
         data_files = [None]  # Sentinel for synthetic data
         total_runs = len(configs)
-        st.info(f"Running {len(configs)} configurations...")
-
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+        execution_mode = "parallel" if use_parallel else "sequential"
+        st.info(f"Running {len(configs)} configurations ({execution_mode}, {n_jobs} jobs)...")
 
     all_results = []
-    run_counter = 0
 
-    # Sequential execution
-    for file_idx, data_file in enumerate(data_files):
-        # Load data for this file
-        if data_file is None:
-            from main import load_or_generate_data
-            df_ohlcv = load_or_generate_data(logger, n_bars=n_bars)
-            file_display = "Synthetic Data"
-        else:
-            try:
-                df_ohlcv = pd.read_csv(data_file)
-                file_display = data_file.name
+    if use_parallel:
+        # Parallel execution
+        from src.parallel_grid_search import parallel_multi_file_grid_search
 
-                required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
-                if not all(col in df_ohlcv.columns for col in required_cols):
-                    st.warning(f"⚠️ Skipping {file_display}: Missing required columns")
+        # Prepare data files
+        data_file_tuples = []
+        for data_file in data_files:
+            if data_file is None:
+                from main import load_or_generate_data
+                df_ohlcv = load_or_generate_data(logger, n_bars=n_bars)
+                file_display = "Synthetic Data"
+            else:
+                try:
+                    df_ohlcv = pd.read_csv(data_file)
+                    file_display = data_file.name
+
+                    required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+                    if not all(col in df_ohlcv.columns for col in required_cols):
+                        st.warning(f"⚠️ Skipping {file_display}: Missing required columns")
+                        continue
+                except Exception as e:
+                    st.warning(f"⚠️ Error loading {data_file.name}: {e}")
                     continue
 
-            except Exception as e:
-                st.warning(f"⚠️ Error loading {data_file.name}: {e}")
-                continue
+            data_file_tuples.append((df_ohlcv, file_display))
 
-        scalers_cache = {}
-
-        for config_idx, config in enumerate(configs):
-            run_counter += 1
-            config_id = Config.get_config_id(config)
-
-            if len(data_files) > 1:
-                status_text.text(f"File {file_idx+1}/{len(data_files)} ({file_display}) | Config {config_idx+1}/{len(configs)}: {config_id}")
-            else:
-                status_text.text(f"Processing {config_idx+1}/{len(configs)}: {config_id}")
-
-            result = process_single_config(
-                config=config,
-                df_ohlcv=df_ohlcv,
+        with st.spinner(f"Running parallel grid search with {n_jobs} workers..."):
+            all_results = parallel_multi_file_grid_search(
+                configs=configs,
+                data_files=data_file_tuples,
                 backend_type=st.session_state.backend_type,
                 backend_module=st.session_state.backend_module,
                 storage=st.session_state.storage,
-                logger=logger,
-                scalers_cache=scalers_cache
+                process_func=process_single_config,
+                n_jobs=n_jobs,
+                verbose=10  # Show progress
             )
+    else:
+        # Sequential execution with progress bar
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        run_counter = 0
 
-            result['data_file'] = file_display
-            all_results.append(result)
+        for file_idx, data_file in enumerate(data_files):
+            # Load data for this file
+            if data_file is None:
+                from main import load_or_generate_data
+                df_ohlcv = load_or_generate_data(logger, n_bars=n_bars)
+                file_display = "Synthetic Data"
+            else:
+                try:
+                    df_ohlcv = pd.read_csv(data_file)
+                    file_display = data_file.name
 
-            progress_bar.progress(run_counter / total_runs)
+                    required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+                    if not all(col in df_ohlcv.columns for col in required_cols):
+                        st.warning(f"⚠️ Skipping {file_display}: Missing required columns")
+                        continue
 
-    status_text.empty()
-    progress_bar.empty()
+                except Exception as e:
+                    st.warning(f"⚠️ Error loading {data_file.name}: {e}")
+                    continue
+
+            scalers_cache = {}
+
+            for config_idx, config in enumerate(configs):
+                run_counter += 1
+                config_id = Config.get_config_id(config)
+
+                if len(data_files) > 1:
+                    status_text.text(f"File {file_idx+1}/{len(data_files)} ({file_display}) | Config {config_idx+1}/{len(configs)}: {config_id}")
+                else:
+                    status_text.text(f"Processing {config_idx+1}/{len(configs)}: {config_id}")
+
+                result = process_single_config(
+                    config=config,
+                    df_ohlcv=df_ohlcv,
+                    backend_type=st.session_state.backend_type,
+                    backend_module=st.session_state.backend_module,
+                    storage=st.session_state.storage,
+                    logger=logger,
+                    scalers_cache=scalers_cache
+                )
+
+                result['data_file'] = file_display
+                all_results.append(result)
+
+                progress_bar.progress(run_counter / total_runs)
+
+        status_text.empty()
+        progress_bar.empty()
 
     # Calculate elapsed time
     elapsed_time = time.time() - start_time
@@ -969,7 +1039,7 @@ def run_grid_search(window_sizes, min_cluster_sizes, min_samples_options, metric
             {'File': k, 'Successful': v['success'], 'Total': v['total'], 'Success Rate': f"{v['success']/v['total']*100:.1f}%"}
             for k, v in file_summary.items()
         ])
-        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+        st.dataframe(summary_df, width='stretch', hide_index=True)
 
 
 def show_results_explorer():
@@ -1030,7 +1100,7 @@ def show_results_explorer():
             'run_id', 'config_id', 'window_size', 'min_cluster_size', 'min_samples',
             'n_clusters', 'silhouette_score', 'davies_bouldin_score', 'noise_ratio'
         ]],
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         height=400
     )
@@ -1105,7 +1175,7 @@ def show_visualizations():
                 },
                 title="Quality vs Noise Trade-off"
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
         # Parallel coordinates plot
         st.subheader("Parameter Space Exploration")
@@ -1120,7 +1190,7 @@ def show_visualizations():
                 color_continuous_scale='Viridis',
                 title="Hyperparameter Exploration"
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
     # Tab 2: Dendrogram
     with tabs[1]:
@@ -1212,12 +1282,12 @@ def show_visualizations():
                 # Select/Deselect buttons in a row
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button("✅ Select All", key="select_all_clusters", use_container_width=True):
+                    if st.button("✅ Select All", key="select_all_clusters", width='stretch'):
                         st.session_state.selected_clusters = available_clusters.copy()
                         st.rerun()
 
                 with col2:
-                    if st.button("❌ Deselect All", key="deselect_all_clusters", use_container_width=True):
+                    if st.button("❌ Deselect All", key="deselect_all_clusters", width='stretch'):
                         st.session_state.selected_clusters = []
                         st.rerun()
 
