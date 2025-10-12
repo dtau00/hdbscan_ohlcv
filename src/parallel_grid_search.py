@@ -71,6 +71,12 @@ def process_config_wrapper(
     # Create a local logger for this process
     logger = logging.getLogger(f"parallel_worker_{multiprocessing.current_process().name}")
 
+    # Log which configuration is being processed
+    from src.config import Config
+    config_id = Config.get_config_id(config)
+    file_info = f" on {file_display}" if file_display else ""
+    logger.info(f"[PARALLEL] Starting config {config_id}{file_info} (PID: {multiprocessing.current_process().pid})")
+
     # If backend_module is None and we're using CPU, import hdbscan
     actual_backend_module = backend_module
     if backend_type == 'cpu' and actual_backend_module is None:
@@ -90,6 +96,10 @@ def process_config_wrapper(
         logger=logger,
         scalers_cache=scalers_cache
     )
+
+    # Log completion
+    success_status = "SUCCESS" if result.get('success', False) else "FAILED"
+    logger.info(f"[PARALLEL] Completed config {config_id}{file_info} - {success_status} (PID: {multiprocessing.current_process().pid})")
 
     # Add file info if provided
     if file_display:

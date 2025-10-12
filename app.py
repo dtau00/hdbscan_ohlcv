@@ -267,11 +267,14 @@ def show_configure_run():
             if 'selected_files' not in st.session_state:
                 st.session_state.selected_files = [file_names[0]] if file_names else []
 
+            # Filter out any selected files that no longer exist
+            valid_selected_files = [f for f in st.session_state.selected_files if f in file_names]
+
             # File selector
             selected_file_names = st.multiselect(
                 "Select CSV files to process",
                 file_names,
-                default=st.session_state.selected_files,
+                default=valid_selected_files,
                 help="Select one or more CSV files. Each file will be processed with all parameter combinations."
             )
 
@@ -365,11 +368,20 @@ def show_configure_run():
         # Calculate total configs
         total_configs = len(window_sizes) * len(min_cluster_sizes) * len(min_samples_options) * len(metrics_grid)
 
+        # Show execution plan with job utilization
         if data_files and selected_file_names:
             total_runs = total_configs * len(selected_file_names)
-            st.info(f"📊 This will run **{total_configs}** configurations × **{len(selected_file_names)}** file(s) = **{total_runs}** total runs")
+            if use_parallel:
+                batches = (total_runs + n_jobs - 1) // n_jobs  # Ceiling division
+                st.info(f"📊 **{total_configs}** configs × **{len(selected_file_names)}** file(s) = **{total_runs}** total runs | Using **{n_jobs}** parallel jobs (~{batches} batches)")
+            else:
+                st.info(f"📊 **{total_configs}** configs × **{len(selected_file_names)}** file(s) = **{total_runs}** total runs (sequential)")
         else:
-            st.info(f"ℹ️ This will run **{total_configs}** configurations")
+            if use_parallel:
+                batches = (total_configs + n_jobs - 1) // n_jobs
+                st.info(f"ℹ️ **{total_configs}** configurations | Using **{n_jobs}** parallel jobs (~{batches} batches)")
+            else:
+                st.info(f"ℹ️ **{total_configs}** configurations (sequential)")
 
         if st.button("▶ Run Grid Search", type="primary", width='stretch'):
             if data_files and not selected_file_names:
@@ -390,158 +402,63 @@ def show_configure_run():
     with tabs[1]:
         st.subheader("Data Management")
 
-        # Yahoo Finance Download Section
-        st.markdown("### \U0001F4E5 Download from Yahoo Finance")
+        # Binance Download Section
+        st.markdown("### \U0001F4E5 Download from Binance (Free)")
 
-        # Tabs for single vs bulk download
-        download_tabs = st.tabs(["\U0001F4C4 Single Ticker", "\U0001F4CA Bulk Download"])
+        col1, col2 = st.columns(2)
 
-        # Tab 1: Single Ticker Download
-        with download_tabs[0]:
-            col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            symbol = st.text_input(
+                "Trading Pair",
+                "BTCUSDT",
+                help="Trading pair symbol (e.g., BTCUSDT, ETHUSDT, BNBUSDT). Must be in uppercase."
+            ).upper()
 
-            with col1:
-                yf_ticker = st.text_input(
-                    "Ticker Symbol",
-                    "SPY",
-                    help="Stock ticker symbol (e.g., SPY, AAPL, QQQ). Works with stocks, ETFs, and some futures."
-                )
-
-            with col2:
-                yf_interval = st.selectbox(
-                    "Interval",
-                    ["1m", "5m", "15m", "30m", "1h", "1d"],
-                    index=0,
-                    help="Bar timeframe. 1m: 1-minute bars (max 7 days). Higher intervals allow longer history."
-                )
-
-            with col3:
-                # Dynamic period options based on interval
-                interval_limits = {
-                    "1m": ["1d", "5d", "7d", "1mo"],  # 1mo sometimes works, 7d is reliable
-                    "5m": ["1d", "5d", "1mo", "3mo"],
-                    "15m": ["1d", "5d", "1mo", "3mo", "6mo"],
-                    "30m": ["1d", "5d", "1mo", "3mo", "6mo", "1y"],
-                    "1h": ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y"],
-                    "1d": ["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max"]
-                }
-
-                yf_period = st.selectbox(
-                    "Period",
-                    interval_limits.get(yf_interval, ["7d"]),
-                    help=f"Historical period to download. Max for {yf_interval}: {interval_limits.get(yf_interval, ['7d'])[-1]}"
-                )
-
-            with col4:
-                yf_run_immediately = st.checkbox(
-                    "Run Clustering After Download",
-                    value=True,
-                    help="Automatically run HDBSCAN clustering on downloaded data using default parameters."
-                )
-
-            col1, col2 = st.columns([3, 1])
-
-            with col1:
-                if st.button("\U0001F4E5 Download & Save Data", type="primary", width='stretch'):
-                    download_from_yahoo(yf_ticker, yf_interval, yf_period, yf_run_immediately)
-
-            with col2:
-                st.info(f"ℹ️ Est. bars: {estimate_bars(yf_interval, yf_period)}")
-
-        # Tab 2: Bulk Download (NASDAQ-100)
-        with download_tabs[1]:
-            st.markdown("Download data for all NASDAQ-100 stocks")
-
-            # NASDAQ-100 ticker list (current as of 2025)
-            nas100_tickers = [
-                "AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "NVDA", "META", "TSLA", "AVGO", "COST",
-                "ASML", "AMD", "PEP", "ADBE", "CSCO", "CMCSA", "TMUS", "NFLX", "INTC", "QCOM",
-                "INTU", "TXN", "AMGN", "HON", "AMAT", "BKNG", "SBUX", "GILD", "ADI", "VRTX",
-                "PYPL", "ADP", "ISRG", "LRCX", "REGN", "MU", "MDLZ", "PANW", "KLAC", "MELI",
-                "SNPS", "CDNS", "MAR", "CSX", "ORLY", "ABNB", "MNST", "FTNT", "ADSK", "MRVL",
-                "CHTR", "NXPI", "AEP", "WDAY", "DASH", "PCAR", "KDP", "PAYX", "CPRT", "DXCM",
-                "MRNA", "ROST", "ODFL", "EA", "CTSH", "FAST", "CEG", "LULU", "IDXX", "KHC",
-                "EXC", "GEHC", "TTD", "TEAM", "XEL", "VRSK", "CTAS", "FANG", "BKR", "ANSS",
-                "ZS", "DDOG", "ON", "BIIB", "CCEP", "ILMN", "CDW", "GFS", "WBD", "MDB",
-                "SMCI", "CRWD", "APP", "TTWO", "WBA", "DLTR", "PDD", "ZM", "MCHP", "ENPH"
-            ]
-
-            col1, col2, col3 = st.columns(3)
-
-            with col1:
-                bulk_interval = st.selectbox(
-                    "Interval",
-                    ["1m", "5m", "15m", "30m", "1h", "1d"],
-                    index=5,  # Default to 1d for bulk
-                    key="bulk_interval",
-                    help="Bar timeframe. For bulk downloads, 1d is recommended to avoid API limits."
-                )
-
-            with col2:
-                interval_limits_bulk = {
-                    "1m": ["1d", "5d", "7d"],
-                    "5m": ["1d", "5d", "1mo"],
-                    "15m": ["1d", "5d", "1mo", "3mo"],
-                    "30m": ["1d", "5d", "1mo", "3mo"],
-                    "1h": ["1d", "5d", "1mo", "3mo", "6mo"],
-                    "1d": ["1mo", "3mo", "6mo", "1y", "2y", "5y"]
-                }
-
-                bulk_period = st.selectbox(
-                    "Period",
-                    interval_limits_bulk.get(bulk_interval, ["1mo"]),
-                    index=3 if bulk_interval == "1d" else 0,  # Default to 1y for 1d data
-                    key="bulk_period",
-                    help="Historical period. Shorter periods recommended for bulk downloads."
-                )
-
-            with col3:
-                max_tickers = st.number_input(
-                    "Max Tickers",
-                    1, len(nas100_tickers), len(nas100_tickers),
-                    key="max_tickers",
-                    help="Maximum number of tickers to download (in alphabetical order). Set to 100 for all."
-                )
-
-            # Stock selection
-            st.markdown("**Select Stocks:**")
-            selection_mode = st.radio(
-                "Mode",
-                ["All", "Custom"],
-                horizontal=True,
-                help="All: download all NAS100 stocks. Custom: select specific tickers."
+        with col2:
+            interval = st.selectbox(
+                "Interval",
+                ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"],
+                index=11,  # Default to 1d
+                help="Candlestick timeframe. Binance supports various intervals from 1 minute to 1 month."
             )
 
-            if selection_mode == "Custom":
-                selected_tickers = st.multiselect(
-                    "Select tickers",
-                    nas100_tickers,
-                    default=nas100_tickers[:10],
-                    help="Choose which tickers to download."
-                )
+        # Date range selection
+        col1, col2 = st.columns(2)
+
+        with col1:
+            from datetime import datetime, timedelta
+            default_start = datetime.now() - timedelta(days=30)
+            start_date = st.date_input(
+                "Start Date",
+                value=default_start,
+                help="Beginning of date range to download."
+            )
+
+        with col2:
+            end_date = st.date_input(
+                "End Date",
+                value=datetime.now(),
+                help="End of date range to download."
+            )
+
+        # Estimate number of bars
+        estimated_bars = estimate_binance_bars(start_date, end_date, interval)
+        if estimated_bars > 0:
+            st.info(f"📊 Estimated candles: ~{estimated_bars:,} bars")
+        else:
+            st.warning("⚠️ Invalid date range (start date must be before end date)")
+
+        run_clustering = st.checkbox(
+            "Run Clustering After Download",
+            value=True,
+            help="Automatically run HDBSCAN clustering on downloaded data using default parameters."
+        )
+
+        if st.button("\U0001F4E5 Download & Save Data", type="primary", width='stretch'):
+            if estimated_bars <= 0:
+                st.error("Invalid date range!")
             else:
-                selected_tickers = nas100_tickers[:max_tickers]
-
-            st.info(f"📊 Will download {len(selected_tickers)} stocks × ~{estimate_bars(bulk_interval, bulk_period)} bars each")
-
-            # Options
-            col1, col2 = st.columns(2)
-            with col1:
-                skip_errors = st.checkbox(
-                    "Skip Errors",
-                    value=True,
-                    help="Continue downloading if some tickers fail. Recommended for bulk downloads."
-                )
-            with col2:
-                combine_data = st.checkbox(
-                    "Combine into Single File",
-                    value=False,
-                    help="Save all data to a single CSV with a 'Ticker' column. Otherwise, separate files per ticker."
-                )
-
-            # Download button
-            if st.button("📥 Start Bulk Download", type="primary", width='stretch'):
-                download_bulk_nas100(selected_tickers, bulk_interval, bulk_period, skip_errors, combine_data)
+                download_from_binance(symbol, interval, start_date, end_date, run_clustering)
 
         st.markdown("---")
 
@@ -579,104 +496,132 @@ def show_configure_run():
                 st.rerun()
 
 
-def estimate_bars(interval, period):
-    """Estimate number of bars for given interval and period."""
-    bars_per_day = {
-        "1m": 390,    # US market hours
-        "5m": 78,
-        "15m": 26,
-        "30m": 13,
-        "1h": 6.5,
-        "1d": 1
+def estimate_binance_bars(start_date, end_date, interval: str) -> int:
+    """Estimate number of bars between two dates for a given interval."""
+    from datetime import datetime, timedelta
+
+    # Convert dates to datetime if they're date objects
+    if not isinstance(start_date, datetime):
+        start_date = datetime.combine(start_date, datetime.min.time())
+    if not isinstance(end_date, datetime):
+        end_date = datetime.combine(end_date, datetime.min.time())
+
+    if start_date >= end_date:
+        return 0
+
+    # Calculate time difference
+    time_diff = end_date - start_date
+    total_minutes = time_diff.total_seconds() / 60
+
+    # Map interval to minutes
+    interval_minutes = {
+        "1m": 1,
+        "3m": 3,
+        "5m": 5,
+        "15m": 15,
+        "30m": 30,
+        "1h": 60,
+        "2h": 120,
+        "4h": 240,
+        "6h": 360,
+        "8h": 480,
+        "12h": 720,
+        "1d": 1440,
+        "3d": 4320,
+        "1w": 10080,
+        "1M": 43200  # Approximate (30 days)
     }
 
-    days = {
-        "1d": 1,
-        "5d": 5,
-        "7d": 7,
-        "1mo": 20,
-        "3mo": 60,
-        "6mo": 120,
-        "1y": 252,
-        "2y": 504,
-        "5y": 1260,
-        "10y": 2520,
-        "max": 25200
-    }
+    interval_mins = interval_minutes.get(interval, 1)
+    estimated = int(total_minutes / interval_mins)
 
-    bars_day = bars_per_day.get(interval, 390)
-    num_days = days.get(period, 7)
-
-    estimated = int(bars_day * num_days)
-    return f"~{estimated:,}"
+    return estimated
 
 
-def download_from_yahoo(ticker: str, interval: str, period: str, run_clustering: bool = True) -> None:
-    """Download data from Yahoo Finance and optionally run clustering."""
-    try:
-        import yfinance as yf
-    except ImportError:
-        st.error("yfinance not installed. Run: pip install yfinance")
-        return
+def download_from_binance(symbol: str, interval: str, start_date, end_date, run_clustering: bool = True) -> None:
+    """Download data from Binance public API using date range and optionally run clustering."""
+    import requests
+    from datetime import datetime
 
-    # Expected minimum bars for 1m interval with 1mo period
-    min_bars_for_1mo = 5000  # ~13 trading days
+    # Convert dates to datetime and then to milliseconds timestamp
+    if not isinstance(start_date, datetime):
+        start_date = datetime.combine(start_date, datetime.min.time())
+    if not isinstance(end_date, datetime):
+        end_date = datetime.combine(end_date, datetime.max.time())
 
-    with st.spinner(f"Downloading {ticker} {interval} data for {period}..."):
+    start_ms = int(start_date.timestamp() * 1000)
+    end_ms = int(end_date.timestamp() * 1000)
+
+    with st.spinner(f"Downloading {symbol} {interval} data from {start_date.date()} to {end_date.date()}..."):
         try:
-            # Download data
-            data: pd.DataFrame | None = yf.download(ticker, interval=interval, period=period, progress=False)
+            # Binance public API endpoint (no auth required)
+            url = "https://api.binance.com/api/v3/klines"
 
-            # Check if data is None or empty
-            if data is None or data.empty:
-                st.error(f"No data returned for {ticker}. Check ticker symbol and try again.")
-                return
+            all_data = []
+            current_start = start_ms
 
-            # At this point, data is guaranteed to be a non-empty DataFrame
-            # Fallback logic for 1m interval with 1mo period
-            if interval == "1m" and period == "1mo" and len(data) < min_bars_for_1mo:
-                st.warning(f"⚠️ 1mo request returned only {len(data)} bars (expected ~7,800). Retrying with 7d fallback...")
-                fallback_data: pd.DataFrame | None = yf.download(ticker, interval=interval, period="7d", progress=False)
-                period = "7d (fallback)"  # Update for filename
+            # Binance limits to 1000 candles per request, so we may need multiple requests
+            while current_start < end_ms:
+                params = {
+                    'symbol': symbol,
+                    'interval': interval,
+                    'startTime': current_start,
+                    'endTime': end_ms,
+                    'limit': 1000
+                }
 
-                # Check fallback data
-                if fallback_data is None or fallback_data.empty:
-                    st.error(f"No data returned for {ticker}. Check ticker symbol and try again.")
+                response = requests.get(url, params=params)
+
+                if response.status_code != 200:
+                    st.error(f"Failed to download data: {response.json().get('msg', 'Unknown error')}")
                     return
 
-                data = fallback_data
-                st.info(f"ℹ️ Using 7d fallback: {len(data)} bars retrieved")
+                data_json = response.json()
 
-            # Flatten multi-level columns if present (happens with single ticker downloads)
-            if isinstance(data.columns, pd.MultiIndex):
-                data.columns = data.columns.get_level_values(0)
+                if not data_json:
+                    break  # No more data
 
-            # Ensure we have OHLCV columns
-            required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
-            if not all(col in data.columns for col in required_cols):
-                st.error(f"Downloaded data missing required columns. Got: {list(data.columns)}")
+                all_data.extend(data_json)
+
+                # Update start time to the last candle's close time + 1ms
+                current_start = data_json[-1][6] + 1  # Close time is at index 6
+
+                # If we got less than 1000 candles, we're done
+                if len(data_json) < 1000:
+                    break
+
+            if not all_data:
+                st.error(f"No data returned for {symbol}. Check symbol name and date range.")
                 return
 
-            # Keep only OHLCV and ensure proper order
-            data = data[required_cols].copy()
+            # Convert to DataFrame
+            # Binance klines format: [Open time, Open, High, Low, Close, Volume, Close time, ...]
+            df = pd.DataFrame(all_data, columns=[
+                'Open_time', 'Open', 'High', 'Low', 'Close', 'Volume',
+                'Close_time', 'Quote_volume', 'Trades', 'Taker_buy_base',
+                'Taker_buy_quote', 'Ignore'
+            ])
+
+            # Convert timestamp to datetime
+            df['Open_time'] = pd.to_datetime(df['Open_time'], unit='ms')
+            df.set_index('Open_time', inplace=True)
+
+            # Keep only OHLCV columns and convert to float
+            required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+            data = df[required_cols].copy()
+            data = data.astype(float)
 
             # Remove any NaN rows
             data = data.dropna()
 
-            # Show success message with actual vs expected
-            if interval == "1m" and "1mo" in str(period):
-                expected_bars = 7800
-                if len(data) >= min_bars_for_1mo:
-                    st.success(f"✅ Got full month of data: {len(data):,} bars (expected ~{expected_bars:,})")
-                else:
-                    st.info(f"ℹ️ Limited data: {len(data):,} bars (~7 days worth)")
-
             # Save to file
-            filename = f"{ticker}_{interval}_{period}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            start_str = start_date.strftime('%Y%m%d')
+            end_str = end_date.strftime('%Y%m%d')
+            filename = f"{symbol}_{interval}_{start_str}-{end_str}_{len(data)}bars.csv"
             save_path = Config.DATA_DIR / filename
             data.to_csv(save_path)
 
-            st.success(f"✅ Downloaded {len(data):,} bars to {filename}")
+            st.success(f"✅ Downloaded {len(data):,} candles to {filename}")
 
             # Show preview
             st.write("**Data Preview:**")
@@ -692,20 +637,19 @@ def download_from_yahoo(ticker: str, interval: str, period: str, run_clustering:
             st.write("**Data Statistics:**")
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.metric("Total Bars", f"{len(data):,}")
+                st.metric("Total Candles", f"{len(data):,}")
             with col2:
-                st.metric("Date Range", f"{len(data.index)} bars")
+                st.metric("Interval", interval)
             with col3:
-                st.metric("Start", data.index[0].strftime('%Y-%m-%d'))
+                st.metric("Start", data.index[0].strftime('%Y-%m-%d %H:%M'))
             with col4:
-                st.metric("End", data.index[-1].strftime('%Y-%m-%d'))
+                st.metric("End", data.index[-1].strftime('%Y-%m-%d %H:%M'))
 
             # Run clustering if requested
             if run_clustering:
                 st.markdown("---")
-                st.markdown("### \U000025B6 Running Clustering on Downloaded Data")
+                st.markdown("### ▶ Running Clustering on Downloaded Data")
 
-                # Use default parameters for quick clustering
                 from main import process_single_config
                 import logging
 
@@ -742,123 +686,6 @@ def download_from_yahoo(ticker: str, interval: str, period: str, run_clustering:
             import traceback
             with st.expander("Show error details"):
                 st.code(traceback.format_exc())
-
-
-def download_bulk_nas100(tickers, interval, period, skip_errors=True, combine_data=False):
-    """Download data for multiple NASDAQ-100 tickers in bulk."""
-    try:
-        import yfinance as yf
-    except ImportError:
-        st.error("yfinance not installed. Run: pip install yfinance")
-        return
-
-    total_tickers = len(tickers)
-    successful_downloads = []
-    failed_downloads = []
-    all_data = []
-
-    st.info(f"Starting bulk download of {total_tickers} tickers...")
-
-    # Progress tracking
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    results_container = st.container()
-
-    for i, ticker in enumerate(tickers):
-        status_text.text(f"Downloading {i+1}/{total_tickers}: {ticker}")
-
-        try:
-            # Download data
-            data = yf.download(ticker, interval=interval, period=period, progress=False)
-
-            if data is None or data.empty:
-                raise ValueError(f"No data returned for {ticker}")
-
-            # Flatten multi-level columns if present
-            if isinstance(data.columns, pd.MultiIndex):
-                data.columns = data.columns.get_level_values(0)
-
-            # Ensure OHLCV columns
-            required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
-            if not all(col in data.columns for col in required_cols):
-                raise ValueError(f"Missing required columns for {ticker}")
-
-            # Keep only OHLCV
-            data = data[required_cols].copy()
-            data = data.dropna()
-
-            if len(data) == 0:
-                raise ValueError(f"No valid data after cleaning for {ticker}")
-
-            # Save or accumulate
-            if combine_data:
-                # Add ticker column and accumulate
-                data['Ticker'] = ticker
-                all_data.append(data)
-            else:
-                # Save individual file
-                filename = f"{ticker}_{interval}_{period}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-                save_path = Config.DATA_DIR / filename
-                data.to_csv(save_path)
-
-            successful_downloads.append((ticker, len(data)))
-
-        except Exception as e:
-            failed_downloads.append((ticker, str(e)))
-            if not skip_errors:
-                st.error(f"Failed on {ticker}: {e}")
-                break
-
-        # Update progress
-        progress_bar.progress((i + 1) / total_tickers)
-
-    # Clear progress indicators
-    progress_bar.empty()
-    status_text.empty()
-
-    # Save combined data if requested
-    if combine_data and all_data:
-        combined_df = pd.concat(all_data, axis=0)
-        filename = f"NAS100_bulk_{interval}_{period}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        save_path = Config.DATA_DIR / filename
-        combined_df.to_csv(save_path)
-        st.success(f"✅ Saved combined data to {filename} ({len(combined_df):,} total bars)")
-
-    # Show summary
-    with results_container:
-        st.markdown("### Download Summary")
-
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Successful", len(successful_downloads), delta=None)
-        with col2:
-            st.metric("Failed", len(failed_downloads), delta=None)
-        with col3:
-            success_rate = (len(successful_downloads) / total_tickers * 100) if total_tickers > 0 else 0
-            st.metric("Success Rate", f"{success_rate:.1f}%")
-
-        # Successful downloads details
-        if successful_downloads:
-            st.markdown("**✅ Successful Downloads:**")
-            success_df = pd.DataFrame(successful_downloads, columns=['Ticker', 'Bars'])
-            success_df['Total Bars'] = success_df['Bars']
-            st.dataframe(success_df, width='stretch', hide_index=True)
-
-            total_bars = success_df['Bars'].sum()
-            avg_bars = success_df['Bars'].mean()
-            st.info(f"📊 Total: {total_bars:,} bars | Average: {avg_bars:.0f} bars per ticker")
-
-        # Failed downloads details
-        if failed_downloads:
-            st.markdown("**❌ Failed Downloads:**")
-            with st.expander(f"Show {len(failed_downloads)} failed tickers"):
-                failed_df = pd.DataFrame(failed_downloads, columns=['Ticker', 'Error'])
-                st.dataframe(failed_df, width='stretch', hide_index=True)
-
-        # Next steps
-        if successful_downloads and not combine_data:
-            st.success(f"✅ Downloaded {len(successful_downloads)} files to `{Config.DATA_DIR}`")
-            st.info("💡 Tip: Use the Grid Search tab to cluster individual ticker files.")
 
 
 def run_grid_search(window_sizes, min_cluster_sizes, min_samples_options, metrics, n_bars, selected_files=None, use_parallel=False, n_jobs=1):
