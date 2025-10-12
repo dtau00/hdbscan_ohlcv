@@ -5,10 +5,24 @@ This tool visualizes sample OHLCV patterns from clusters discovered by HDBSCAN.
 It creates candlestick plots arranged in a grid to show representative patterns
 from each cluster.
 
+Features:
+- Parallel pattern rendering for faster visualization
+- Representative sampling to avoid temporally overlapping patterns
+- Customizable number of samples per cluster
+- Flexible output formats
+
 Usage:
+    # Basic usage with parallel rendering
     python tools/visualize_clusters.py --run_id 1 --clusters 0 1 2 --n_samples 5
+
+    # Visualize all clusters with parallel processing
     python tools/visualize_clusters.py --run_id run0001 --clusters all --n_samples 3
-    python tools/visualize_clusters.py --run_id 2 --clusters 0 1 --output my_clusters.png
+
+    # Custom output and specific number of parallel jobs
+    python tools/visualize_clusters.py --run_id 2 --clusters 0 1 --output my_clusters.png --n-jobs 4
+
+    # Disable parallel processing (use sequential)
+    python tools/visualize_clusters.py --run_id 1 --clusters 0 1 --no-parallel
 """
 
 import argparse
@@ -24,6 +38,8 @@ matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from matplotlib.axes import Axes
+from joblib import Parallel, delayed
+import multiprocessing
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -33,6 +49,134 @@ from src.data_loader import OHLCVDataLoader
 from src.config import Config
 
 logger = logging.getLogger(__name__)
+
+
+def _render_single_pattern(
+    window: npt.NDArray[np.float64],
+    title: str,
+    show_grid: bool = True
+) -> Tuple[np.ndarray, str]:
+    """
+    Render a single OHLCV pattern to a numpy array.
+
+    This is a standalone function for parallel processing.
+
+    Args:
+        window: OHLCV window of shape (window_size, 4)
+        title: Title for the subplot
+        show_grid: Whether to show grid lines
+
+    Returns:
+        Tuple of (rendered image as numpy array, title)
+    """
+    # Create a small figure for this pattern
+    fig, ax = plt.subplots(figsize=(3, 2.5))
+
+    window_size = len(window)
+
+    # Extract OHLC data
+    opens = window[:, 0]
+    highs = window[:, 1]
+    lows = window[:, 2]
+    closes = window[:, 3]
+
+    # Define colors
+    color_up = '#26A69A'  # Green for up candles
+    color_down = '#EF5350'  # Red for down candles
+
+    # Plot each candlestick
+    for i in range(window_size):
+        open_price = opens[i]
+        close_price = closes[i]
+        high_price = highs[i]
+        low_price = lows[i]
+
+        # Determine color
+        color = color_up if close_price >= open_price else color_down
+
+        # Draw high-low line (wick)
+        ax.plot([i, i], [low_price, high_price], color=color, linewidth=1.0)
+
+        # Draw open-close box (body)
+        height = abs(close_price - open_price)
+        bottom = min(open_price, close_price)
+
+        # Avoid zero height rectangles
+        if height == 0:
+            height = (high_price - low_price) * 0.01  # 1% of range
+
+        rect = Rectangle(
+            xy=(i - 0.3, bottom),
+            width=0.6,
+            height=height,
+            facecolor=color,
+            edgecolor=color,
+            linewidth=1.0
+        )
+        ax.add_patch(rect)
+
+    # Formatting
+    ax.set_xlim(-0.5, window_size - 0.5)
+    ax.set_ylim(window.min() * 0.995, window.max() * 1.005)
+    ax.set_title(title, fontsize=9, pad=5)
+    ax.set_xlabel('Bar', fontsize=8)
+    ax.set_ylabel('Price', fontsize=8)
+    ax.tick_params(axis='both', which='major', labelsize=7)
+
+    if show_grid:
+        ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+
+    # Convert to numpy array using modern matplotlib API
+    fig.canvas.draw()
+    # Use buffer_rgba() instead of deprecated tostring_rgb()
+    buf = fig.canvas.buffer_rgba()
+    img_array = np.asarray(buf)
+    # Convert RGBA to RGB by dropping alpha channel
+    img_array = img_array[:, :, :3]
+
+    plt.close(fig)
+
+    return img_array, title
+
+
+def _process_cluster_patterns_parallel(
+    cluster_id: int,
+    cluster_info: Dict,
+    windows: npt.NDArray[np.float64],
+    sampled_indices: npt.NDArray[np.int64],
+    n_samples: int
+) -> List[Tuple[int, int, np.ndarray, str]]:
+    """
+    Process all patterns for a single cluster in parallel.
+
+    Args:
+        cluster_id: Cluster identifier
+        cluster_info: Cluster information dict
+        windows: All OHLCV windows
+        sampled_indices: Sampled window indices for this cluster
+        n_samples: Number of samples to render
+
+    Returns:
+        List of (row_idx, col_idx, img_array, title) tuples
+    """
+    results = []
+
+    for col_idx, window_idx in enumerate(sampled_indices):
+        if col_idx >= n_samples:
+            break
+
+        window = windows[window_idx]
+
+        # Create title
+        if col_idx == 0:
+            title = f"Cluster {cluster_id} (n={cluster_info['size']})\nSample {col_idx+1}"
+        else:
+            title = f"Sample {col_idx+1}"
+
+        img_array, title = _render_single_pattern(window, title)
+        results.append((col_idx, img_array, title))
+
+    return results
 
 
 class ClusterVisualizer:
@@ -353,7 +497,9 @@ class ClusterVisualizer:
         figsize: Optional[Tuple[int, int]] = None,
         seed: int = 42,
         use_representatives: bool = True,
-        min_distance: Optional[int] = None
+        min_distance: Optional[int] = None,
+        use_parallel: bool = True,
+        n_jobs: Optional[int] = None
     ) -> Optional[Path]:
         """
         Plot sample OHLCV windows from specified clusters.
@@ -372,6 +518,8 @@ class ClusterVisualizer:
             min_distance: Minimum temporal distance between samples (window indices).
                          Only used if use_representatives=True.
                          If None, defaults to window_size (no temporal overlap).
+            use_parallel: If True, render patterns in parallel (default: True)
+            n_jobs: Number of parallel jobs (None = auto, -1 = all cores)
 
         Returns:
             Path to saved figure, or None if not saved
@@ -401,9 +549,10 @@ class ClusterVisualizer:
                 )
 
         sampling_mode = "representative" if use_representatives else "random"
+        execution_mode = "parallel" if use_parallel else "sequential"
         logger.info(
             f"Plotting {len(cluster_ids)} clusters with {n_samples} samples each "
-            f"(sampling mode: {sampling_mode})"
+            f"(sampling mode: {sampling_mode}, execution: {execution_mode})"
         )
 
         # Calculate grid dimensions
@@ -428,8 +577,9 @@ class ClusterVisualizer:
         # Get window size for representative sampling
         window_size = config['window_size']
 
-        # Plot each cluster
-        for row_idx, cluster_id in enumerate(cluster_ids):
+        # Sample windows for all clusters first
+        cluster_samples = []
+        for cluster_id in cluster_ids:
             info = cluster_info[cluster_id]
 
             # Sample windows from this cluster
@@ -449,23 +599,78 @@ class ClusterVisualizer:
                     seed=seed
                 )
 
-            # Plot each sample
-            for col_idx, window_idx in enumerate(sampled_indices):
-                if col_idx >= n_cols:
-                    break
+            cluster_samples.append((cluster_id, info, sampled_indices))
 
+        # Plot each cluster (sequential or parallel)
+        if use_parallel:
+            # Determine number of jobs
+            if n_jobs is None:
+                n_jobs_actual = min(multiprocessing.cpu_count(), len(cluster_ids) * n_samples)
+            elif n_jobs == -1:
+                n_jobs_actual = multiprocessing.cpu_count()
+            else:
+                n_jobs_actual = min(n_jobs, multiprocessing.cpu_count())
+
+            logger.info(f"Using {n_jobs_actual} parallel workers for pattern rendering")
+
+            # Create all tasks (cluster_id, sample_idx, window)
+            tasks = []
+            for row_idx, (cluster_id, info, sampled_indices) in enumerate(cluster_samples):
+                for col_idx, window_idx in enumerate(sampled_indices):
+                    if col_idx >= n_cols:
+                        break
+
+                    window = windows[window_idx]
+
+                    # Create title
+                    if col_idx == 0:
+                        title = f"Cluster {cluster_id} (n={info['size']})\nSample {col_idx+1}"
+                    else:
+                        title = f"Sample {col_idx+1}"
+
+                    tasks.append((row_idx, col_idx, window, title))
+
+            # Render patterns in parallel
+            # Use threading backend to avoid broken pipe errors in Streamlit
+            try:
+                results = Parallel(n_jobs=n_jobs_actual, verbose=0, backend='threading')(
+                    delayed(_render_single_pattern)(window, title)
+                    for _, _, window, title in tasks
+                )
+            except (BrokenPipeError, OSError) as e:
+                logger.warning(f"Parallel rendering failed ({str(e)}), falling back to sequential mode...")
+                results = []
+                for _, _, window, title in tasks:
+                    results.append(_render_single_pattern(window, title))
+
+            # Place rendered images on axes
+            for (row_idx, col_idx, _, _), (img_array, title) in zip(tasks, results):
                 ax = axes[row_idx, col_idx]
-                window = windows[window_idx]
+                ax.imshow(img_array)
+                ax.axis('off')
+                ax.set_title(title, fontsize=9, pad=5)
 
-                # Create title
-                if col_idx == 0:
-                    title = f"Cluster {cluster_id} (n={info['size']})\nSample {col_idx+1}"
-                else:
-                    title = f"Sample {col_idx+1}"
+        else:
+            # Sequential rendering (original method)
+            for row_idx, (cluster_id, info, sampled_indices) in enumerate(cluster_samples):
+                # Plot each sample
+                for col_idx, window_idx in enumerate(sampled_indices):
+                    if col_idx >= n_cols:
+                        break
 
-                self.plot_ohlcv_window(ax, window, title=title)
+                    ax = axes[row_idx, col_idx]
+                    window = windows[window_idx]
 
-            # Hide unused subplots in this row
+                    # Create title
+                    if col_idx == 0:
+                        title = f"Cluster {cluster_id} (n={info['size']})\nSample {col_idx+1}"
+                    else:
+                        title = f"Sample {col_idx+1}"
+
+                    self.plot_ohlcv_window(ax, window, title=title)
+
+        # Hide unused subplots
+        for row_idx, (cluster_id, info, sampled_indices) in enumerate(cluster_samples):
             for col_idx in range(len(sampled_indices), n_cols):
                 axes[row_idx, col_idx].axis('off')
 
@@ -647,6 +852,17 @@ Examples:
         help='Print cluster summary only, do not create visualization'
     )
     parser.add_argument(
+        '--no-parallel',
+        action='store_true',
+        help='Disable parallel pattern rendering (use sequential rendering)'
+    )
+    parser.add_argument(
+        '--n-jobs',
+        type=int,
+        default=None,
+        help='Number of parallel jobs for pattern rendering (None = auto, -1 = all cores)'
+    )
+    parser.add_argument(
         '--log_level',
         type=str,
         default='INFO',
@@ -713,6 +929,12 @@ Examples:
         else:
             print("Using random sampling")
 
+        use_parallel = not args.no_parallel
+        if use_parallel:
+            print(f"Using parallel pattern rendering (n_jobs={args.n_jobs or 'auto'})")
+        else:
+            print("Using sequential pattern rendering")
+
         output_path = visualizer.plot_cluster_samples(
             run_id=args.run_id,
             ohlcv_df=ohlcv_df,
@@ -723,7 +945,9 @@ Examples:
             figsize=figsize,
             seed=args.seed,
             use_representatives=use_representatives,
-            min_distance=args.min_distance
+            min_distance=args.min_distance,
+            use_parallel=use_parallel,
+            n_jobs=args.n_jobs
         )
 
         if output_path:

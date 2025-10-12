@@ -1301,6 +1301,50 @@ def show_visualizations():
                     help="How many random examples to show from each cluster. More samples give better sense of cluster variation."
                 )
 
+                st.markdown("---")
+
+                # Parallel processing settings (matching grid search UI)
+                st.markdown("### ⚡ Parallel Rendering")
+
+                import multiprocessing
+                cpu_count = multiprocessing.cpu_count()
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    use_parallel_viz = st.checkbox(
+                        "Enable Parallel Rendering",
+                        value=True,
+                        help="Render patterns in parallel for faster visualization. Uses threading backend for Streamlit compatibility.",
+                        key="viz_parallel"
+                    )
+
+                    if use_parallel_viz:
+                        st.info(f"ℹ️ Using threading backend (Streamlit-compatible)")
+
+                with col2:
+                    if use_parallel_viz:
+                        # Use conservative default of 2 workers, max 24 (same as grid search)
+                        default_jobs = 2
+                        n_jobs_viz = st.number_input(
+                            "Number of Parallel Jobs",
+                            1, 24, default_jobs,
+                            key="n_jobs_viz",
+                            help=f"Number of threads to use (recommended: 2-4 for stability, max 24). System has {cpu_count} cores."
+                        )
+                    else:
+                        n_jobs_viz = 1
+
+                # Show execution plan with job utilization
+                if use_parallel_viz:
+                    estimated_patterns = len(selected_clusters) * n_samples
+                    batches = (estimated_patterns + n_jobs_viz - 1) // n_jobs_viz  # Ceiling division
+                    st.info(f"📊 Rendering **{estimated_patterns}** patterns | Using **{n_jobs_viz}** parallel jobs (~{batches} batches)")
+                else:
+                    st.info(f"📊 Rendering **{len(selected_clusters) * n_samples}** patterns (sequential)")
+
+                st.markdown("---")
+
                 # Only show button if clusters are selected
                 if not selected_clusters:
                     st.warning("⚠️ Please select at least one cluster to visualize.")
@@ -1360,18 +1404,37 @@ def show_visualizations():
                             # Generate output path
                             output_path = Config.RESULTS_DIR / "visualizations" / f"clusters_run{int(run_id):04d}.png"
 
-                            # Plot cluster samples
-                            result_path = visualizer.plot_cluster_samples(
-                                run_id=int(run_id),
-                                ohlcv_df=ohlcv_df,
-                                cluster_ids=cluster_list,
-                                n_samples=n_samples,
-                                output_path=str(output_path),
-                                show=False
-                            )
+                            # Plot cluster samples with GUI-configured parallel settings
+                            # Try parallel first, fall back to sequential if it fails
+                            result_path = None
+                            try:
+                                result_path = visualizer.plot_cluster_samples(
+                                    run_id=int(run_id),
+                                    ohlcv_df=ohlcv_df,
+                                    cluster_ids=cluster_list,
+                                    n_samples=n_samples,
+                                    output_path=str(output_path),
+                                    show=False,
+                                    use_parallel=use_parallel_viz,
+                                    n_jobs=n_jobs_viz
+                                )
+                            except (BrokenPipeError, OSError) as e:
+                                # Parallel execution failed, fall back to sequential
+                                st.warning(f"⚠️ Parallel rendering failed ({str(e)}), falling back to sequential mode...")
+                                result_path = visualizer.plot_cluster_samples(
+                                    run_id=int(run_id),
+                                    ohlcv_df=ohlcv_df,
+                                    cluster_ids=cluster_list,
+                                    n_samples=n_samples,
+                                    output_path=str(output_path),
+                                    show=False,
+                                    use_parallel=False,
+                                    n_jobs=1
+                                )
 
-                            st.success(f"Patterns saved to {result_path}")
-                            st.image(str(result_path))
+                            if result_path:
+                                st.success(f"Patterns saved to {result_path}")
+                                st.image(str(result_path))
                     except Exception as e:
                         st.error(f"Error generating patterns: {e}")
                         import traceback
