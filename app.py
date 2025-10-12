@@ -1242,6 +1242,34 @@ def show_visualizations():
         if run_id is None:
             st.info("Please select a run ID to visualize.")
         else:
+            # Check for cached visualizations
+            from pathlib import Path
+            results_dir_name = f"run{int(run_id):04d}"
+            cache_dir = Path('.cache/viz') / results_dir_name
+
+            cache_exists = cache_dir.exists() and (cache_dir / "metadata.pkl").exists()
+
+            if cache_exists:
+                import pickle
+                with open(cache_dir / "metadata.pkl", 'rb') as f:
+                    cache_metadata = pickle.load(f)
+
+                st.success(f"✅ Pre-generated cache found ({cache_metadata['n_clusters']} clusters, {cache_metadata['n_samples']} samples each)")
+                st.info(f"📁 Cache location: `{cache_dir}`")
+
+                col1, col2 = st.columns([1, 3])
+                with col1:
+                    if st.button("🗑️ Clear Cache", help="Delete pre-generated images to regenerate with different settings"):
+                        import shutil
+                        shutil.rmtree(cache_dir)
+                        st.success("Cache cleared!")
+                        st.rerun()
+                with col2:
+                    st.info(f"Generated: {cache_metadata.get('generated_at', 'Unknown')}")
+
+                st.markdown("---")
+            else:
+                st.info("ℹ️ No pre-generated cache found. Use pre-generation for faster visualization.")
             # Get actual cluster info from labels file (more reliable than metrics CSV)
             try:
                 from src.storage import ResultsStorage
@@ -1257,7 +1285,109 @@ def show_visualizations():
 
             if n_clusters == 0:
                 st.warning("⚠️ This run has no clusters (all points classified as noise).")
+
             else:
+                # Pre-generation section
+                st.markdown("### ⚡ Pre-Generate Visualizations (Parallel)")
+
+                st.info("💡 **Tip:** Pre-generation runs outside Streamlit and can use true multiprocessing for much faster generation.")
+
+                col1, col2 = st.columns([2, 1])
+
+                with col1:
+                    pregen_samples = st.number_input(
+                        "Samples per Cluster (for pre-generation)",
+                        1, 50, 10,
+                        key="pregen_samples",
+                        help="Number of samples to generate for each cluster"
+                    )
+
+                with col2:
+                    if st.button("🚀 Pre-Generate All Clusters", type="primary", help="Run standalone script with true parallelization"):
+                        # Find the matching data file
+                        from src.storage import ResultsStorage
+                        temp_storage = ResultsStorage()
+                        labels_data, config_data = temp_storage.load_labels(int(run_id))
+                        expected_windows = len(labels_data)
+                        window_size_data = config_data['window_size']
+                        expected_bars_data = expected_windows + window_size_data - 1
+
+                        # Find best matching data file
+                        data_files_search = list(Config.DATA_DIR.glob("*.csv"))
+                        best_match_file = None
+                        min_diff_val = float('inf')
+
+                        if data_files_search:
+                            for data_file_item in data_files_search:
+                                try:
+                                    df_temp_check = pd.read_csv(data_file_item)
+                                    n_bars_check = len(df_temp_check)
+                                    diff_val = abs(n_bars_check - expected_bars_data)
+                                    if diff_val < min_diff_val:
+                                        min_diff_val = diff_val
+                                        best_match_file = data_file_item
+                                except:
+                                    continue
+
+                        if best_match_file:
+                            # Save windows.npy for the script
+                            from src.data_loader import OHLCVDataLoader
+                            import numpy as np_save
+                            ohlcv_data_pregen = pd.read_csv(best_match_file)
+                            loader = OHLCVDataLoader(ohlcv_data_pregen, copy=False)
+                            windows_result = loader.create_windows(window_size_data)
+
+                            # Ensure it's an array, not a generator
+                            if not isinstance(windows_result, np_save.ndarray):
+                                windows_array = np_save.array(list(windows_result))
+                            else:
+                                windows_array = windows_result
+
+                            # Save to results directory for this run
+                            results_run_dir = Config.RESULTS_DIR / "labels" / f"run{int(run_id):04d}"
+                            results_run_dir.mkdir(parents=True, exist_ok=True)
+                            windows_save_path = results_run_dir / "windows.npy"
+
+                            np_save.save(windows_save_path, windows_array)
+
+                            # Find results.pkl (use labels file as results)
+                            labels_pattern_search = f"labels_run{int(run_id):04d}_*.npz"
+                            labels_files = list(Config.LABELS_DIR.glob(labels_pattern_search))
+
+                            if labels_files:
+                                # Create a temporary results.pkl with labels
+                                results_pkl_path = results_run_dir / "results.pkl"
+                                import pickle as pkl_save
+                                with open(results_pkl_path, 'wb') as f_save:
+                                    pkl_save.dump({'labels': labels_data}, f_save)
+
+                                # Run pre-generation script
+                                import subprocess as subp
+                                import sys
+                                cmd = [
+                                    sys.executable,  # Use same Python interpreter as Streamlit
+                                    "tools/pregenerate_viz.py",
+                                    "--results", str(results_pkl_path),
+                                    "--samples", str(pregen_samples)
+                                ]
+
+                                with st.spinner(f"Pre-generating {n_clusters} clusters with {pregen_samples} samples each..."):
+                                    result_proc = subp.run(cmd, capture_output=True, text=True)
+
+                                    if result_proc.returncode == 0:
+                                        st.success("✅ Pre-generation complete!")
+                                        st.code(result_proc.stdout)
+                                        st.rerun()
+                                    else:
+                                        st.error("❌ Pre-generation failed")
+                                        st.code(result_proc.stderr)
+                            else:
+                                st.error(f"Labels file not found for run {run_id}")
+                        else:
+                            st.error("No matching data file found")
+
+                st.markdown("---")
+
                 # Show available clusters using actual IDs from labels
                 available_clusters = actual_cluster_ids
                 st.info(f"📊 This run has **{n_clusters}** clusters (IDs: {', '.join(map(str, available_clusters))})")

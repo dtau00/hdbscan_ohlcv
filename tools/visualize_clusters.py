@@ -28,6 +28,7 @@ Usage:
 import argparse
 import logging
 import sys
+import pickle
 from pathlib import Path
 from typing import Optional, List, Tuple, Dict
 import numpy as np
@@ -40,6 +41,7 @@ from matplotlib.patches import Rectangle
 from matplotlib.axes import Axes
 from joblib import Parallel, delayed
 import multiprocessing
+from PIL import Image
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -49,6 +51,60 @@ from src.data_loader import OHLCVDataLoader
 from src.config import Config
 
 logger = logging.getLogger(__name__)
+
+
+def load_from_cache(cache_dir: Path, cluster_ids: Optional[List[int]] = None) -> Optional[Tuple[Dict[int, np.ndarray], Dict]]:
+    """
+    Load pre-generated cluster images from cache.
+
+    Args:
+        cache_dir: Directory containing cached images
+        cluster_ids: Optional list of cluster IDs to load (None = load all)
+
+    Returns:
+        Tuple of (images_dict, metadata) if cache exists and is valid, None otherwise
+    """
+    cache_dir = Path(cache_dir)
+
+    if not cache_dir.exists():
+        logger.info(f"Cache directory does not exist: {cache_dir}")
+        return None
+
+    # Load metadata
+    metadata_path = cache_dir / "metadata.pkl"
+    if not metadata_path.exists():
+        logger.warning(f"Cache metadata not found: {metadata_path}")
+        return None
+
+    with open(metadata_path, 'rb') as f:
+        metadata = pickle.load(f)
+
+    logger.info(f"Found cache with {metadata['n_clusters']} clusters generated at {metadata['generated_at']}")
+
+    # Determine which clusters to load
+    if cluster_ids is None:
+        cluster_ids_to_load = metadata['cluster_ids']
+    else:
+        cluster_ids_to_load = cluster_ids
+        # Validate requested cluster IDs are in cache
+        missing_ids = set(cluster_ids_to_load) - set(metadata['cluster_ids'])
+        if missing_ids:
+            logger.warning(f"Cluster IDs not in cache: {missing_ids}")
+            return None
+
+    # Load images
+    images = {}
+    for cluster_id in cluster_ids_to_load:
+        img_path = cache_dir / f"cluster_{cluster_id}.png"
+        if not img_path.exists():
+            logger.warning(f"Missing image for cluster {cluster_id}: {img_path}")
+            return None
+
+        img = Image.open(img_path)
+        images[cluster_id] = np.array(img)
+
+    logger.info(f"Loaded {len(images)} cluster images from cache")
+    return images, metadata
 
 
 def _render_single_pattern(
@@ -139,15 +195,19 @@ def _render_single_pattern(
     return img_array, title
 
 
-def _process_cluster_patterns_parallel(
+def _render_cluster_image(
     cluster_id: int,
     cluster_info: Dict,
     windows: npt.NDArray[np.float64],
     sampled_indices: npt.NDArray[np.int64],
-    n_samples: int
-) -> List[Tuple[int, int, np.ndarray, str]]:
+    n_samples: int,
+    show_grid: bool = True
+) -> Tuple[int, np.ndarray]:
     """
-    Process all patterns for a single cluster in parallel.
+    Render a complete image for a single cluster with all its samples.
+
+    This function creates a standalone figure with one row showing all samples
+    from this cluster, then converts it to a numpy array image.
 
     Args:
         cluster_id: Cluster identifier
@@ -155,17 +215,80 @@ def _process_cluster_patterns_parallel(
         windows: All OHLCV windows
         sampled_indices: Sampled window indices for this cluster
         n_samples: Number of samples to render
+        show_grid: Whether to show grid lines
 
     Returns:
-        List of (row_idx, col_idx, img_array, title) tuples
+        Tuple of (cluster_id, complete_row_image_array)
     """
-    results = []
+    import os
+    import threading
+    import time
 
+    start_time = time.time()
+    pid = os.getpid()
+    thread_name = threading.current_thread().name
+
+    # Setup logging to file
+    debug_log = Path("/tmp/hdbscan_viz_debug.log")
+    with open(debug_log, 'a') as f:
+        f.write(f"[{time.strftime('%H:%M:%S')}] START Cluster {cluster_id} | PID={pid} | Thread={thread_name}\n")
+
+    logger.info(f"[Cluster {cluster_id}] START rendering in PID={pid}, Thread={thread_name}")
+
+    # Create figure for this cluster (1 row, n_samples columns)
+    n_cols = min(len(sampled_indices), n_samples)
+
+    with open(debug_log, 'a') as f:
+        f.write(f"[{time.strftime('%H:%M:%S')}] Cluster {cluster_id} | Creating figure with {n_cols} columns\n")
+    fig, axes = plt.subplots(1, n_cols, figsize=(n_cols * 3, 2.5), squeeze=False)
+
+    # Plot each sample in this cluster
     for col_idx, window_idx in enumerate(sampled_indices):
-        if col_idx >= n_samples:
+        if col_idx >= n_cols:
             break
 
+        ax = axes[0, col_idx]
         window = windows[window_idx]
+
+        # Extract OHLC data
+        window_size = len(window)
+        opens = window[:, 0]
+        highs = window[:, 1]
+        lows = window[:, 2]
+        closes = window[:, 3]
+
+        # Define colors
+        color_up = '#26A69A'
+        color_down = '#EF5350'
+
+        # Plot each candlestick
+        for i in range(window_size):
+            open_price = opens[i]
+            close_price = closes[i]
+            high_price = highs[i]
+            low_price = lows[i]
+
+            color = color_up if close_price >= open_price else color_down
+            ax.plot([i, i], [low_price, high_price], color=color, linewidth=1.0)
+
+            height = abs(close_price - open_price)
+            bottom = min(open_price, close_price)
+            if height == 0:
+                height = (high_price - low_price) * 0.01
+
+            rect = Rectangle(
+                xy=(i - 0.3, bottom),
+                width=0.6,
+                height=height,
+                facecolor=color,
+                edgecolor=color,
+                linewidth=1.0
+            )
+            ax.add_patch(rect)
+
+        # Formatting
+        ax.set_xlim(-0.5, window_size - 0.5)
+        ax.set_ylim(window.min() * 0.995, window.max() * 1.005)
 
         # Create title
         if col_idx == 0:
@@ -173,10 +296,34 @@ def _process_cluster_patterns_parallel(
         else:
             title = f"Sample {col_idx+1}"
 
-        img_array, title = _render_single_pattern(window, title)
-        results.append((col_idx, img_array, title))
+        ax.set_title(title, fontsize=9, pad=5)
+        ax.set_xlabel('Bar', fontsize=8)
+        ax.set_ylabel('Price', fontsize=8)
+        ax.tick_params(axis='both', which='major', labelsize=7)
 
-    return results
+        if show_grid:
+            ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+
+    with open(debug_log, 'a') as f:
+        f.write(f"[{time.strftime('%H:%M:%S')}] Cluster {cluster_id} | Plotting complete, converting to image\n")
+
+    plt.tight_layout()
+
+    # Convert entire figure to numpy array
+    fig.canvas.draw()
+    buf = fig.canvas.buffer_rgba()
+    img_array = np.asarray(buf)
+    # Convert RGBA to RGB by dropping alpha channel
+    img_array = img_array[:, :, :3]
+
+    plt.close(fig)
+
+    elapsed = time.time() - start_time
+    with open(debug_log, 'a') as f:
+        f.write(f"[{time.strftime('%H:%M:%S')}] DONE Cluster {cluster_id} | Shape={img_array.shape} | Time={elapsed:.2f}s\n")
+
+    logger.info(f"[Cluster {cluster_id}] DONE in {elapsed:.2f}s, shape={img_array.shape}")
+    return cluster_id, img_array
 
 
 class ClusterVisualizer:
@@ -603,52 +750,76 @@ class ClusterVisualizer:
 
         # Plot each cluster (sequential or parallel)
         if use_parallel:
+            # Clear debug log at start
+            debug_log = Path("/tmp/hdbscan_viz_debug.log")
+            with open(debug_log, 'w') as f:
+                f.write(f"=== Visualization Debug Log Started ===\n")
+                f.write(f"Time: {pd.Timestamp.now()}\n")
+                f.write(f"Clusters: {len(cluster_ids)}\n")
+                f.write(f"Samples per cluster: {n_cols}\n")
+                f.write("=" * 50 + "\n")
+
             # Determine number of jobs
             if n_jobs is None:
-                n_jobs_actual = min(multiprocessing.cpu_count(), len(cluster_ids) * n_samples)
+                n_jobs_actual = min(multiprocessing.cpu_count(), len(cluster_ids))
             elif n_jobs == -1:
                 n_jobs_actual = multiprocessing.cpu_count()
             else:
-                n_jobs_actual = min(n_jobs, multiprocessing.cpu_count())
+                n_jobs_actual = min(n_jobs, len(cluster_ids))
 
-            logger.info(f"Using {n_jobs_actual} parallel workers for pattern rendering")
+            logger.info(f"Using {n_jobs_actual} parallel workers to render {len(cluster_ids)} cluster images")
+            logger.info(f"Debug log: {debug_log}")
 
-            # Create all tasks (cluster_id, sample_idx, window)
-            tasks = []
-            for row_idx, (cluster_id, info, sampled_indices) in enumerate(cluster_samples):
-                for col_idx, window_idx in enumerate(sampled_indices):
-                    if col_idx >= n_cols:
-                        break
-
-                    window = windows[window_idx]
-
-                    # Create title
-                    if col_idx == 0:
-                        title = f"Cluster {cluster_id} (n={info['size']})\nSample {col_idx+1}"
-                    else:
-                        title = f"Sample {col_idx+1}"
-
-                    tasks.append((row_idx, col_idx, window, title))
-
-            # Render patterns in parallel
-            # Use threading backend to avoid broken pipe errors in Streamlit
+            # Render each cluster as a complete image in parallel
+            # Use Python's native multiprocessing for true parallel execution
             try:
-                results = Parallel(n_jobs=n_jobs_actual, verbose=0, backend='threading')(
-                    delayed(_render_single_pattern)(window, title)
-                    for _, _, window, title in tasks
-                )
-            except (BrokenPipeError, OSError) as e:
-                logger.warning(f"Parallel rendering failed ({str(e)}), falling back to sequential mode...")
-                results = []
-                for _, _, window, title in tasks:
-                    results.append(_render_single_pattern(window, title))
+                logger.info(f"Starting parallel rendering with multiprocessing.Pool...")
+                from multiprocessing import Pool
+                from functools import partial
 
-            # Place rendered images on axes
-            for (row_idx, col_idx, _, _), (img_array, title) in zip(tasks, results):
-                ax = axes[row_idx, col_idx]
-                ax.imshow(img_array)
-                ax.axis('off')
-                ax.set_title(title, fontsize=9, pad=5)
+                # Create partial function with fixed parameters
+                render_func = partial(
+                    _render_cluster_image,
+                    windows=windows,
+                    n_samples=n_cols,
+                    show_grid=True
+                )
+
+                # Prepare arguments
+                args_list = [
+                    (cluster_id, info, sampled_indices)
+                    for cluster_id, info, sampled_indices in cluster_samples
+                ]
+
+                # Use multiprocessing Pool
+                with Pool(processes=n_jobs_actual) as pool:
+                    cluster_images = pool.starmap(
+                        lambda cid, info, sidx: _render_cluster_image(cid, info, windows, sidx, n_cols, True),
+                        args_list
+                    )
+
+                logger.info(f"Parallel rendering completed successfully with {len(cluster_images)} images")
+            except Exception as e:
+                logger.warning(f"Multiprocessing failed ({str(e)}), falling back to sequential mode...")
+                cluster_images = []
+                for cluster_id, info, sampled_indices in cluster_samples:
+                    cluster_images.append(
+                        _render_cluster_image(
+                            cluster_id, info, windows, sampled_indices, n_cols
+                        )
+                    )
+
+            # Place cluster images on axes (each cluster image spans entire row)
+            for row_idx, (cluster_id, cluster_img) in enumerate(cluster_images):
+                # Display the complete cluster image across the entire row
+                # Turn off all individual axes and use the first one to show the full image
+                for col_idx in range(n_cols):
+                    axes[row_idx, col_idx].axis('off')
+
+                # Use the entire row to display the cluster image
+                axes[row_idx, 0].imshow(cluster_img, aspect='auto', extent=[0, n_cols, 0, 1])
+                axes[row_idx, 0].set_xlim(0, n_cols)
+                axes[row_idx, 0].set_ylim(0, 1)
 
         else:
             # Sequential rendering (original method)
