@@ -20,6 +20,13 @@ mplfinance>=0.12.10b0
 joblib>=1.0.0
 tqdm>=4.62.0
 
+# Web UI
+streamlit>=1.30.0
+plotly>=5.18.0
+
+# Data download
+yfinance>=0.2.0
+
 # Optional GPU dependencies for CUDA 12.x (install separately)
 # pip install cupy-cuda12x>=13.0.0 cuml-cu12>=25.10.0 --extra-index-url=https://pypi.nvidia.com
 # Note: Requires CUDA 12.x compatible GPU and drivers

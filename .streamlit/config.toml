@@ -1,0 +1,18 @@
+[theme]
+# Dark theme configuration
+base = "dark"
+primaryColor = "#4dabf7"
+backgroundColor = "#0e1117"
+secondaryBackgroundColor = "#262730"
+textColor = "#fafafa"
+font = "sans serif"
+
+[server]
+headless = true
+port = 8501
+# For local use only - disable CORS and XSRF protection
+enableCORS = false
+enableXsrfProtection = false
+
+[browser]
+gatherUsageStats = false
