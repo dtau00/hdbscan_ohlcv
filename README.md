@@ -18,15 +18,15 @@ GPU-accelerated HDBSCAN clustering for OHLCV (Open, High, Low, Close, Volume) tr
 git clone https://github.com/yourusername/hdbscan_ohlcv.git
 cd hdbscan_ohlcv
 
-# Create virtual environment
-python -m venv hdbscan
-source hdbscan/bin/activate  # On Windows: hdbscan\Scripts\activate
+# Create conda environment with Python 3.11 (recommended for GPU support)
+conda create -n hdbscan_gpu python=3.11 -y
+conda activate hdbscan_gpu
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Optional: Install GPU dependencies (if you have CUDA)
-pip install cuml-cu11 cupy-cuda11x
+# Optional: Install GPU dependencies (if you have CUDA 12.x)
+pip install cupy-cuda12x cuml-cu12 --extra-index-url=https://pypi.nvidia.com
 ```
 
 ## Quick Start
@@ -148,8 +148,12 @@ print(info)  # Pretty formatted output
 
 ## Requirements
 
+### Python Version
+- **Python 3.11** (recommended for best GPU support)
+- Python 3.10-3.12 also supported
+- **Note**: Python 3.13 may have compatibility issues with RAPIDS cuML
+
 ### Core Dependencies
-- Python >= 3.8
 - numpy >= 1.21.0
 - pandas >= 1.3.0
 - scikit-learn >= 1.0.0
@@ -157,15 +161,19 @@ print(info)  # Pretty formatted output
 ### CPU Backend (Required)
 - hdbscan >= 0.8.27
 
-### GPU Backend (Optional)
-- cupy-cuda11x >= 11.0.0
-- cuml-cu11 >= 23.0.0
+### GPU Backend (Optional - CUDA 12.x)
+- cupy-cuda12x >= 13.0.0
+- cuml-cu12 >= 25.10.0
+- **CUDA 12.x** compatible GPU required
+- Works with NVIDIA RTX 20/30/40/50 series and data center GPUs
 
 ## Testing
 
 ```bash
+# Activate environment
+conda activate hdbscan_gpu
+
 # Run tests
-source hdbscan/bin/activate
 python test_fallback.py
 
 # Test individual modules

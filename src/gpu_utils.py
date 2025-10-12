@@ -177,5 +177,4 @@ if __name__ == "__main__":
 
     info = get_backend_info(backend_type, backend_module)
     print("\nDetailed Backend Information:")
-    for key, value in info.items():
-        print(f"  {key}: {value}")
+    print(info)
