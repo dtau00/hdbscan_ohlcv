@@ -23,7 +23,7 @@ import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
-import matplotlib.patches as mpatches
+from matplotlib.axes import Axes
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -90,8 +90,18 @@ class ClusterVisualizer:
 
         # Load/create windows
         self.load_ohlcv_data(ohlcv_df)
+        if self.data_loader is None:
+            raise RuntimeError("Data loader not initialized")
+
         window_size = config['window_size']
-        windows = self.data_loader.create_windows(window_size)
+        # Always create windows without batch_size to get the full array
+        windows_result = self.data_loader.create_windows(window_size)
+
+        # Ensure we have an array, not a generator
+        if not isinstance(windows_result, np.ndarray):
+            raise TypeError(f"Expected ndarray from create_windows, got {type(windows_result)}")
+
+        windows: npt.NDArray[np.float64] = windows_result
 
         logger.info(f"Created windows: shape={windows.shape}")
 
@@ -169,7 +179,7 @@ class ClusterVisualizer:
 
     def plot_ohlcv_window(
         self,
-        ax: plt.Axes,
+        ax: Axes,
         window: npt.NDArray[np.float64],
         title: str = "",
         show_grid: bool = True
@@ -292,14 +302,14 @@ class ClusterVisualizer:
 
         # Calculate grid dimensions
         n_clusters = len(cluster_ids)
-        n_cols = min(n_samples, 5)  # Max 5 columns
+        n_cols = n_samples  # Use actual n_samples requested
         n_rows = n_clusters
 
         # Calculate figure size if not provided
         if figsize is None:
             fig_width = n_cols * 3 + 1
             fig_height = n_rows * 2.5 + 1
-            figsize = (fig_width, fig_height)
+            figsize = (int(fig_width), int(fig_height))
 
         # Create figure and axes
         fig, axes = plt.subplots(
@@ -349,21 +359,22 @@ class ClusterVisualizer:
             y=0.995
         )
 
-        plt.tight_layout(rect=[0, 0, 1, 0.99])
+        plt.tight_layout(rect=(0.0, 0.0, 1.0, 0.99))
 
         # Save figure
+        output_file: Optional[Path] = None
         if output_path or not show:
             if output_path is None:
                 # Use visualizations subdirectory under results
                 vis_dir = Config.RESULTS_DIR / "visualizations"
                 vis_dir.mkdir(parents=True, exist_ok=True)
-                output_path = vis_dir / f"clusters_run{run_id:04d}_{config_id}.png"
+                output_file = vis_dir / f"clusters_run{run_id:04d}_{config_id}.png"
             else:
-                output_path = Path(output_path)
+                output_file = Path(output_path)
 
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            plt.savefig(output_path, dpi=150, bbox_inches='tight')
-            logger.info(f"Cluster visualization saved to: {output_path}")
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            plt.savefig(output_file, dpi=150, bbox_inches='tight')
+            logger.info(f"Cluster visualization saved to: {output_file}")
 
         # Show interactively if requested
         if show:
@@ -372,7 +383,7 @@ class ClusterVisualizer:
         else:
             plt.close(fig)
 
-        return Path(output_path) if output_path else None
+        return output_file
 
     def print_cluster_summary(
         self,
@@ -386,7 +397,7 @@ class ClusterVisualizer:
             run_id: Run identifier
             ohlcv_df: OHLCV DataFrame
         """
-        labels, config, windows = self.load_run_data(run_id, ohlcv_df)
+        labels, config, _ = self.load_run_data(run_id, ohlcv_df)
         cluster_info = self.get_cluster_info(labels)
 
         n_noise = np.sum(labels == -1)

@@ -1253,20 +1253,34 @@ def show_visualizations():
         if run_id is None:
             st.info("Please select a run ID to visualize.")
         else:
-            # Get info about this run to show available clusters
-            run_data = df[df['run_id'] == run_id].iloc[0]
-            n_clusters = int(run_data['n_clusters'])
+            # Get actual cluster info from labels file (more reliable than metrics CSV)
+            try:
+                from src.storage import ResultsStorage
+                import numpy as np
+                temp_storage = ResultsStorage()
+                labels, config = temp_storage.load_labels(int(run_id))
+                unique_labels = np.unique(labels)
+                actual_cluster_ids = sorted([int(x) for x in unique_labels if x != -1])
+                n_clusters = len(actual_cluster_ids)
+            except Exception as e:
+                st.error(f"Error loading cluster data: {e}")
+                return
 
             if n_clusters == 0:
                 st.warning("⚠️ This run has no clusters (all points classified as noise).")
             else:
-                # Show available clusters
-                available_clusters = list(range(n_clusters))
+                # Show available clusters using actual IDs from labels
+                available_clusters = actual_cluster_ids
                 st.info(f"📊 This run has **{n_clusters}** clusters (IDs: {', '.join(map(str, available_clusters))})")
 
-                # Initialize session state for selected clusters if needed
-                if 'selected_clusters' not in st.session_state:
+                # Initialize or reset session state for selected clusters
+                # Reset if run_id changed or if stored clusters are invalid for this run
+                if ('selected_clusters' not in st.session_state or
+                    'last_viz_run_id' not in st.session_state or
+                    st.session_state.last_viz_run_id != run_id or
+                    not all(c in available_clusters for c in st.session_state.selected_clusters)):
                     st.session_state.selected_clusters = available_clusters[:min(3, n_clusters)]
+                    st.session_state.last_viz_run_id = run_id
 
                 # Use multiselect for cluster selection
                 selected_clusters = st.multiselect(
@@ -1313,17 +1327,46 @@ def show_visualizations():
                         with st.spinner("Generating patterns..."):
                             visualizer = ClusterVisualizer(results_dir=str(Config.RESULTS_DIR))
 
-                            # We need to load the OHLCV data - check if there's a data file or use synthetic
+                            # Try to determine correct data by checking expected window count
+                            # Load labels to get expected count
+                            from src.storage import ResultsStorage
+                            temp_storage = ResultsStorage()
+                            labels, config = temp_storage.load_labels(int(run_id))
+                            expected_windows = len(labels)
+                            window_size = config['window_size']
+                            expected_bars = expected_windows + window_size - 1
+
+                            st.info(f"Looking for data file with ~{expected_bars} bars (creates {expected_windows} windows with window_size={window_size})")
+
+                            # Check data files
                             data_files = list(Config.DATA_DIR.glob("*.csv"))
+                            best_match = None
+                            min_diff = float('inf')
+
                             if data_files:
-                                # Use first available data file
-                                ohlcv_df = pd.read_csv(data_files[0])
-                                st.info(f"Using data from: {data_files[0].name}")
+                                for data_file in data_files:
+                                    try:
+                                        df_temp = pd.read_csv(data_file)
+                                        n_bars = len(df_temp)
+                                        diff = abs(n_bars - expected_bars)
+                                        if diff < min_diff:
+                                            min_diff = diff
+                                            best_match = data_file
+                                    except:
+                                        continue
+
+                                if best_match:
+                                    ohlcv_df = pd.read_csv(best_match)
+                                    st.info(f"Using data from: {best_match.name} ({len(ohlcv_df)} bars)")
+                                else:
+                                    st.warning("No suitable data file found, using first available")
+                                    ohlcv_df = pd.read_csv(data_files[0])
+                                    st.info(f"Using data from: {data_files[0].name} ({len(ohlcv_df)} bars)")
                             else:
                                 # Generate synthetic data
                                 from main import generate_synthetic_ohlcv
-                                ohlcv_df = generate_synthetic_ohlcv(n_bars=1000)
-                                st.info("Using synthetic OHLCV data")
+                                ohlcv_df = generate_synthetic_ohlcv(n_bars=expected_bars, seed=42)
+                                st.info(f"Using synthetic OHLCV data ({expected_bars} bars)")
 
                             # Generate output path
                             output_path = Config.RESULTS_DIR / "visualizations" / f"clusters_run{int(run_id):04d}.png"
