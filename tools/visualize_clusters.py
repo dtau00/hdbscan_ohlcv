@@ -177,6 +177,101 @@ class ClusterVisualizer:
 
         return sampled
 
+    def sample_cluster_representatives(
+        self,
+        cluster_indices: npt.NDArray[np.int64],
+        windows: npt.NDArray[np.float64],
+        n_samples: int,
+        min_distance: Optional[int] = None,
+        window_size: Optional[int] = None,
+        seed: Optional[int] = 42
+    ) -> npt.NDArray[np.int64]:
+        """
+        Sample representative (non-overlapping) indices from a cluster.
+
+        This method addresses the problem of temporally adjacent windows
+        being clustered together. It selects diverse samples by:
+        1. Computing distances to cluster centroid
+        2. Selecting samples that are well-separated in time
+        3. Prioritizing samples closer to the centroid
+
+        Args:
+            cluster_indices: Array of indices belonging to cluster
+            windows: All OHLCV windows array
+            n_samples: Number of samples to draw
+            min_distance: Minimum temporal distance between samples (in window indices)
+                         If None, defaults to window_size (no overlap)
+            window_size: Size of windows (for default min_distance calculation)
+                        If None, inferred from windows shape
+            seed: Random seed for reproducibility
+
+        Returns:
+            Array of sampled indices that are temporally separated
+
+        Example:
+            >>> # Get 5 representative samples with minimum 10-bar separation
+            >>> sampled = visualizer.sample_cluster_representatives(
+            ...     cluster_indices, windows, n_samples=5, min_distance=10
+            ... )
+        """
+        if seed is not None:
+            np.random.seed(seed)
+
+        # If cluster is smaller than n_samples, return all indices
+        if len(cluster_indices) <= n_samples:
+            return cluster_indices
+
+        # Determine window size if not provided
+        if window_size is None:
+            window_size = windows.shape[1]
+
+        # Set default minimum distance to window_size (no overlap)
+        if min_distance is None:
+            min_distance = window_size
+
+        # Get cluster windows
+        cluster_windows = windows[cluster_indices]
+
+        # Compute centroid of cluster
+        centroid = cluster_windows.mean(axis=0)
+
+        # Compute distances to centroid for all cluster members
+        # Flatten windows for distance calculation
+        cluster_windows_flat = cluster_windows.reshape(len(cluster_windows), -1)
+        centroid_flat = centroid.reshape(1, -1)
+
+        distances = np.sqrt(np.sum((cluster_windows_flat - centroid_flat) ** 2, axis=1))
+
+        # Create array of (index, distance) pairs, sorted by distance
+        index_distance_pairs = list(zip(cluster_indices, distances))
+        index_distance_pairs.sort(key=lambda x: x[1])  # Sort by distance to centroid
+
+        # Greedy selection: pick samples that are far enough apart
+        selected_indices = []
+        for idx, dist in index_distance_pairs:
+            # Check if this index is far enough from all already selected indices
+            if not selected_indices or all(abs(idx - sel_idx) >= min_distance for sel_idx in selected_indices):
+                selected_indices.append(idx)
+
+                # Stop if we have enough samples
+                if len(selected_indices) >= n_samples:
+                    break
+
+        # If we couldn't find enough separated samples, fill with closest remaining
+        if len(selected_indices) < n_samples:
+            logger.warning(
+                f"Could only find {len(selected_indices)} separated samples "
+                f"(requested {n_samples}) with min_distance={min_distance}"
+            )
+            # Add remaining closest samples that haven't been selected
+            for idx, dist in index_distance_pairs:
+                if idx not in selected_indices:
+                    selected_indices.append(idx)
+                    if len(selected_indices) >= n_samples:
+                        break
+
+        return np.array(sorted(selected_indices), dtype=np.int64)
+
     def plot_ohlcv_window(
         self,
         ax: Axes,
@@ -256,7 +351,9 @@ class ClusterVisualizer:
         output_path: Optional[str] = None,
         show: bool = False,
         figsize: Optional[Tuple[int, int]] = None,
-        seed: int = 42
+        seed: int = 42,
+        use_representatives: bool = True,
+        min_distance: Optional[int] = None
     ) -> Optional[Path]:
         """
         Plot sample OHLCV windows from specified clusters.
@@ -270,6 +367,11 @@ class ClusterVisualizer:
             show: Whether to display the plot interactively
             figsize: Figure size in inches (width, height), auto-calculated if None
             seed: Random seed for sampling
+            use_representatives: If True, select temporally separated representative samples.
+                                If False, use random sampling.
+            min_distance: Minimum temporal distance between samples (window indices).
+                         Only used if use_representatives=True.
+                         If None, defaults to window_size (no temporal overlap).
 
         Returns:
             Path to saved figure, or None if not saved
@@ -298,7 +400,11 @@ class ClusterVisualizer:
                     f"Available clusters: {sorted(cluster_info.keys())}"
                 )
 
-        logger.info(f"Plotting {len(cluster_ids)} clusters with {n_samples} samples each")
+        sampling_mode = "representative" if use_representatives else "random"
+        logger.info(
+            f"Plotting {len(cluster_ids)} clusters with {n_samples} samples each "
+            f"(sampling mode: {sampling_mode})"
+        )
 
         # Calculate grid dimensions
         n_clusters = len(cluster_ids)
@@ -319,16 +425,29 @@ class ClusterVisualizer:
             squeeze=False
         )
 
+        # Get window size for representative sampling
+        window_size = config['window_size']
+
         # Plot each cluster
         for row_idx, cluster_id in enumerate(cluster_ids):
             info = cluster_info[cluster_id]
 
             # Sample windows from this cluster
-            sampled_indices = self.sample_cluster(
-                info['indices'],
-                n_samples,
-                seed=seed
-            )
+            if use_representatives:
+                sampled_indices = self.sample_cluster_representatives(
+                    info['indices'],
+                    windows,
+                    n_samples,
+                    min_distance=min_distance,
+                    window_size=window_size,
+                    seed=seed
+                )
+            else:
+                sampled_indices = self.sample_cluster(
+                    info['indices'],
+                    n_samples,
+                    seed=seed
+                )
 
             # Plot each sample
             for col_idx, window_idx in enumerate(sampled_indices):
@@ -432,8 +551,14 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Visualize clusters 0, 1, 2 from run 1 with 5 samples each
+  # Visualize clusters 0, 1, 2 from run 1 with 5 representative samples each
   python tools/visualize_clusters.py --run_id 1 --clusters 0 1 2 --n_samples 5
+
+  # Use random sampling instead of representative sampling
+  python tools/visualize_clusters.py --run_id 1 --random_sampling
+
+  # Set minimum temporal distance between samples to 15 bars
+  python tools/visualize_clusters.py --run_id 1 --min_distance 15
 
   # Visualize all clusters from run 1
   python tools/visualize_clusters.py --run_id 1 --clusters all
@@ -501,6 +626,22 @@ Examples:
         help='Random seed for sampling (default: 42)'
     )
     parser.add_argument(
+        '--use_representatives',
+        action='store_true',
+        default=True,
+        help='Use representative (temporally separated) sampling (default: True)'
+    )
+    parser.add_argument(
+        '--random_sampling',
+        action='store_true',
+        help='Use random sampling instead of representative sampling'
+    )
+    parser.add_argument(
+        '--min_distance',
+        type=int,
+        help='Minimum temporal distance between samples in bars (default: window_size)'
+    )
+    parser.add_argument(
         '--summary_only',
         action='store_true',
         help='Print cluster summary only, do not create visualization'
@@ -562,8 +703,16 @@ Examples:
             except ValueError:
                 parser.error("--figsize must be in format 'width,height' (e.g., '15,10')")
 
+        # Determine sampling mode
+        use_representatives = not args.random_sampling
+
         # Create visualization
         print("\nGenerating cluster visualizations...")
+        if use_representatives:
+            print("Using representative sampling (temporally separated)")
+        else:
+            print("Using random sampling")
+
         output_path = visualizer.plot_cluster_samples(
             run_id=args.run_id,
             ohlcv_df=ohlcv_df,
@@ -572,7 +721,9 @@ Examples:
             output_path=args.output,
             show=args.show,
             figsize=figsize,
-            seed=args.seed
+            seed=args.seed,
+            use_representatives=use_representatives,
+            min_distance=args.min_distance
         )
 
         if output_path:
