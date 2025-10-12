@@ -17,6 +17,7 @@ import sys
 from datetime import datetime
 import subprocess
 import logging
+from typing import Dict, Any
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent
@@ -761,17 +762,178 @@ def run_grid_search(window_sizes, min_cluster_sizes, min_samples_options, metric
 
             data_file_tuples.append((df_ohlcv, file_display))
 
-        with st.spinner(f"Running parallel grid search with {n_jobs} workers..."):
-            all_results = parallel_multi_file_grid_search(
-                configs=configs,
-                data_files=data_file_tuples,
-                backend_type=st.session_state.backend_type,
-                backend_module=st.session_state.backend_module,
-                storage=st.session_state.storage,
-                process_func=process_single_config,
-                n_jobs=n_jobs,
-                verbose=10  # Show progress
-            )
+        # Create status display containers
+        st.markdown("### ⚡ Parallel Execution Status")
+
+        # Create a status file for tracking progress
+        import tempfile
+        import json
+        status_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.json')
+        status_file_path = status_file.name
+        status_file.close()
+
+        # Initialize status
+        initial_status = {
+            'total': total_runs,
+            'completed': 0,
+            'running': {},  # Dict: {config_id: {config details, pid, start_time}}
+            'completed_list': [],
+            'failed': []
+        }
+        with open(status_file_path, 'w') as f:
+            json.dump(initial_status, f)
+
+        # Create status display containers
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        running_container = st.empty()
+
+        status_text.info(f"⚡ Starting parallel execution with {n_jobs} workers...")
+
+        # Capture session state values before thread starts
+        # (session state is not accessible from background threads)
+        backend_type = st.session_state.backend_type
+        backend_module = st.session_state.backend_module
+        storage = st.session_state.storage
+
+        # Start parallel grid search in background
+        import threading
+        results_container: Dict[str, Any] = {'results': None, 'error': None}
+
+        def run_parallel():
+            try:
+                results = parallel_multi_file_grid_search(
+                    configs=configs,
+                    data_files=data_file_tuples,
+                    backend_type=backend_type,
+                    backend_module=backend_module,
+                    storage=storage,
+                    process_func=process_single_config,
+                    n_jobs=n_jobs,
+                    verbose=10,
+                    status_file=status_file_path
+                )
+                results_container['results'] = results
+            except Exception as e:
+                results_container['error'] = e
+
+        thread = threading.Thread(target=run_parallel)
+        thread.start()
+
+        # Monitor progress while thread runs
+        try:
+            while thread.is_alive():
+                try:
+                    with open(status_file_path, 'r') as f:
+                        current_status = json.load(f)
+
+                    completed = current_status['completed']
+                    total = current_status['total']
+                    running_jobs = current_status.get('running', {})
+
+                    # Update progress bar
+                    progress = completed / total if total > 0 else 0
+                    progress_bar.progress(progress)
+
+                    # Update status text
+                    status_text.info(f"⚡ Progress: {completed}/{total} completed | {len(running_jobs)} running")
+
+                    # Show currently running jobs
+                    if running_jobs:
+                        running_text = "**Currently Running:**\n\n"
+                        for config_id, job_info in list(running_jobs.items())[:5]:  # Show max 5
+                            ws = job_info.get('window_size', '?')
+                            mcs = job_info.get('min_cluster_size', '?')
+                            ms = job_info.get('min_samples', '?')
+                            metric = job_info.get('metric', '?')
+                            file = job_info.get('file', 'N/A')
+                            running_text += f"- `{config_id}` (ws={ws}, mcs={mcs}, ms={ms}, metric={metric}) on {file}\n"
+
+                        if len(running_jobs) > 5:
+                            running_text += f"\n...and {len(running_jobs) - 5} more"
+
+                        running_container.markdown(running_text)
+
+                except Exception:
+                    pass  # Ignore status read errors
+
+                # Sleep briefly before next check
+                import time
+                time.sleep(0.5)
+
+            # Wait for thread to complete
+            thread.join()
+
+            # Check if error occurred
+            if results_container['error']:
+                raise results_container['error']
+
+            all_results = results_container['results']
+
+            # After completion, read final status and display summary
+            try:
+                with open(status_file_path, 'r') as f:
+                    final_status = json.load(f)
+
+                progress_bar.progress(1.0)
+                status_text.success(f"✅ Parallel execution complete: {final_status['completed']}/{final_status['total']} configs processed")
+
+                # Show final summary in an expander
+                with st.expander("📊 Execution Summary", expanded=True):
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total Configs", final_status['total'])
+                    with col2:
+                        st.metric("Completed", final_status['completed'])
+                    with col3:
+                        st.metric("Failed", len(final_status['failed']))
+
+                    # Show completed list if available
+                    if final_status.get('completed_list'):
+                        st.markdown("### ✅ All Completed Jobs")
+                        completed_data = []
+                        for item in final_status['completed_list']:
+                            completed_data.append({
+                                'Config ID': item['config_id'],
+                                'Window': item.get('window_size', '?'),
+                                'Min Cluster': item.get('min_cluster_size', '?'),
+                                'Min Samples': item.get('min_samples', '?'),
+                                'Metric': item.get('metric', '?'),
+                                'File': item.get('file', 'N/A'),
+                                'Status': '✅ Success' if item.get('success') else '❌ Failed'
+                            })
+
+                        completed_df = pd.DataFrame(completed_data)
+                        st.dataframe(completed_df, use_container_width=True, hide_index=True)
+
+                    # Show failed jobs if any
+                    if final_status['failed']:
+                        st.markdown("### ❌ Failed Jobs")
+                        failed_data = []
+                        for item in final_status['failed']:
+                            failed_data.append({
+                                'Config ID': item['config_id'],
+                                'Window': item.get('window_size', '?'),
+                                'Min Cluster': item.get('min_cluster_size', '?'),
+                                'Min Samples': item.get('min_samples', '?'),
+                                'Metric': item.get('metric', '?'),
+                                'File': item.get('file', 'N/A'),
+                                'Error': item.get('error', 'Unknown error')[:80]
+                            })
+
+                        failed_df = pd.DataFrame(failed_data)
+                        st.dataframe(failed_df, use_container_width=True, hide_index=True)
+
+            except Exception as e:
+                status_text.warning(f"Could not read final status: {e}")
+
+        finally:
+            # Clean up status file
+            import os
+            try:
+                os.unlink(status_file_path)
+            except:
+                pass
     else:
         # Sequential execution with progress bar
         progress_bar = st.progress(0)

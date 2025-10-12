@@ -47,7 +47,8 @@ def process_config_wrapper(
     storage: Any,
     scalers_cache: Dict[int, StandardScaler],
     process_func: Callable,
-    file_display: Optional[str] = None
+    file_display: Optional[str] = None,
+    status_file: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Wrapper function for parallel processing of a single configuration.
@@ -77,6 +78,33 @@ def process_config_wrapper(
     file_info = f" on {file_display}" if file_display else ""
     logger.info(f"[PARALLEL] Starting config {config_id}{file_info} (PID: {multiprocessing.current_process().pid})")
 
+    # Update status file - mark as running with full details
+    if status_file:
+        try:
+            import json
+            import fcntl
+            import time
+            with open(status_file, 'r+') as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                status = json.load(f)
+                # Add detailed job info
+                status['running'][config_id] = {
+                    'config_id': config_id,
+                    'window_size': config.get('window_size'),
+                    'min_cluster_size': config.get('min_cluster_size'),
+                    'min_samples': config.get('min_samples'),
+                    'metric': config.get('metric'),
+                    'pid': multiprocessing.current_process().pid,
+                    'start_time': time.time(),
+                    'file': file_display if file_display else 'N/A'
+                }
+                f.seek(0)
+                json.dump(status, f)
+                f.truncate()
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass  # Don't fail job if status update fails
+
     # If backend_module is None and we're using CPU, import hdbscan
     actual_backend_module = backend_module
     if backend_type == 'cpu' and actual_backend_module is None:
@@ -100,6 +128,47 @@ def process_config_wrapper(
     # Log completion
     success_status = "SUCCESS" if result.get('success', False) else "FAILED"
     logger.info(f"[PARALLEL] Completed config {config_id}{file_info} - {success_status} (PID: {multiprocessing.current_process().pid})")
+
+    # Update status file - mark as completed with details
+    if status_file:
+        try:
+            import json
+            import fcntl
+            with open(status_file, 'r+') as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                status = json.load(f)
+                status['completed'] += 1
+
+                # Remove from running
+                job_info = status['running'].pop(config_id, {})
+
+                # Add to completed list
+                completion_info = {
+                    'config_id': config_id,
+                    'window_size': config.get('window_size'),
+                    'min_cluster_size': config.get('min_cluster_size'),
+                    'min_samples': config.get('min_samples'),
+                    'metric': config.get('metric'),
+                    'success': result.get('success', False),
+                    'file': file_display if file_display else 'N/A'
+                }
+
+                if 'completed_list' not in status:
+                    status['completed_list'] = []
+                status['completed_list'].append(completion_info)
+
+                # Add to failed list if not successful
+                if not result.get('success', False):
+                    fail_info = completion_info.copy()
+                    fail_info['error'] = result.get('error', 'Unknown error')
+                    status['failed'].append(fail_info)
+
+                f.seek(0)
+                json.dump(status, f)
+                f.truncate()
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass  # Don't fail job if status update fails
 
     # Add file info if provided
     if file_display:
@@ -176,7 +245,8 @@ def parallel_multi_file_grid_search(
     storage: Any,
     process_func: Callable,
     n_jobs: Optional[int] = None,
-    verbose: int = 10
+    verbose: int = 10,
+    status_file: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
     Execute grid search in parallel across multiple data files.
@@ -226,7 +296,8 @@ def parallel_multi_file_grid_search(
             storage=storage,
             scalers_cache=scalers_cache,
             process_func=process_func,
-            file_display=file_display
+            file_display=file_display,
+            status_file=status_file
         )
         for config, df_ohlcv, file_display in tasks
     )
