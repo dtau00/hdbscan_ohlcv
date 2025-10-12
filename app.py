@@ -1183,64 +1183,98 @@ def show_visualizations():
         if run_id is None:
             st.info("Please select a run ID to visualize.")
         else:
-            col1, col2 = st.columns(2)
-            with col1:
-                cluster_ids = st.text_input(
-                    "Cluster IDs (comma-separated)",
-                    "0,1",
-                    help="Which clusters to visualize. Example: '0,1,2' shows clusters 0, 1, and 2. Check Results Explorer to see available cluster IDs."
+            # Get info about this run to show available clusters
+            run_data = df[df['run_id'] == run_id].iloc[0]
+            n_clusters = int(run_data['n_clusters'])
+
+            if n_clusters == 0:
+                st.warning("⚠️ This run has no clusters (all points classified as noise).")
+            else:
+                # Show available clusters
+                available_clusters = list(range(n_clusters))
+                st.info(f"📊 This run has **{n_clusters}** clusters (IDs: {', '.join(map(str, available_clusters))})")
+
+                # Initialize session state for selected clusters if needed
+                if 'selected_clusters' not in st.session_state:
+                    st.session_state.selected_clusters = available_clusters[:min(3, n_clusters)]
+
+                # Use multiselect for cluster selection
+                selected_clusters = st.multiselect(
+                    "Select Cluster IDs",
+                    options=available_clusters,
+                    default=st.session_state.selected_clusters,
+                    help="Select which clusters to visualize. You can choose multiple clusters to compare their patterns."
                 )
-            with col2:
+
+                # Update session state
+                st.session_state.selected_clusters = selected_clusters
+
+                # Select/Deselect buttons in a row
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("✅ Select All", key="select_all_clusters", use_container_width=True):
+                        st.session_state.selected_clusters = available_clusters.copy()
+                        st.rerun()
+
+                with col2:
+                    if st.button("❌ Deselect All", key="deselect_all_clusters", use_container_width=True):
+                        st.session_state.selected_clusters = []
+                        st.rerun()
+
+                # Samples slider
                 n_samples = st.slider(
                     "Samples per Cluster",
-                    1, 10, 5,
+                    1, 50, 5,
                     help="How many random examples to show from each cluster. More samples give better sense of cluster variation."
                 )
 
-            if st.button(
-                "Generate Pattern Visualization",
-                help="Creates candlestick charts showing actual OHLCV patterns from each cluster."
-            ):
-                try:
-                    from tools.visualize_clusters import ClusterVisualizer
+                # Only show button if clusters are selected
+                if not selected_clusters:
+                    st.warning("⚠️ Please select at least one cluster to visualize.")
+                elif st.button(
+                    "Generate Pattern Visualization",
+                    help="Creates candlestick charts showing actual OHLCV patterns from each cluster."
+                ):
+                    try:
+                        from tools.visualize_clusters import ClusterVisualizer
 
-                    cluster_list = [int(x.strip()) for x in cluster_ids.split(',')]
+                        cluster_list = selected_clusters
 
-                    with st.spinner("Generating patterns..."):
-                        visualizer = ClusterVisualizer(results_dir=str(Config.RESULTS_DIR))
+                        with st.spinner("Generating patterns..."):
+                            visualizer = ClusterVisualizer(results_dir=str(Config.RESULTS_DIR))
 
-                        # We need to load the OHLCV data - check if there's a data file or use synthetic
-                        data_files = list(Config.DATA_DIR.glob("*.csv"))
-                        if data_files:
-                            # Use first available data file
-                            ohlcv_df = pd.read_csv(data_files[0])
-                            st.info(f"Using data from: {data_files[0].name}")
-                        else:
-                            # Generate synthetic data
-                            from main import generate_synthetic_ohlcv
-                            ohlcv_df = generate_synthetic_ohlcv(n_bars=1000)
-                            st.info("Using synthetic OHLCV data")
+                            # We need to load the OHLCV data - check if there's a data file or use synthetic
+                            data_files = list(Config.DATA_DIR.glob("*.csv"))
+                            if data_files:
+                                # Use first available data file
+                                ohlcv_df = pd.read_csv(data_files[0])
+                                st.info(f"Using data from: {data_files[0].name}")
+                            else:
+                                # Generate synthetic data
+                                from main import generate_synthetic_ohlcv
+                                ohlcv_df = generate_synthetic_ohlcv(n_bars=1000)
+                                st.info("Using synthetic OHLCV data")
 
-                        # Generate output path
-                        output_path = Config.RESULTS_DIR / "visualizations" / f"clusters_run{int(run_id):04d}.png"
+                            # Generate output path
+                            output_path = Config.RESULTS_DIR / "visualizations" / f"clusters_run{int(run_id):04d}.png"
 
-                        # Plot cluster samples
-                        result_path = visualizer.plot_cluster_samples(
-                            run_id=int(run_id),
-                            ohlcv_df=ohlcv_df,
-                            cluster_ids=cluster_list,
-                            n_samples=n_samples,
-                            output_path=str(output_path),
-                            show=False
-                        )
+                            # Plot cluster samples
+                            result_path = visualizer.plot_cluster_samples(
+                                run_id=int(run_id),
+                                ohlcv_df=ohlcv_df,
+                                cluster_ids=cluster_list,
+                                n_samples=n_samples,
+                                output_path=str(output_path),
+                                show=False
+                            )
 
-                        st.success(f"Patterns saved to {result_path}")
-                        st.image(str(result_path))
-                except Exception as e:
-                    st.error(f"Error generating patterns: {e}")
-                    import traceback
-                    with st.expander("Show error details"):
-                        st.code(traceback.format_exc())
+                            st.success(f"Patterns saved to {result_path}")
+                            st.image(str(result_path))
+                    except Exception as e:
+                        st.error(f"Error generating patterns: {e}")
+                        import traceback
+                        with st.expander("Show error details"):
+                            st.code(traceback.format_exc())
 
 
 def show_logs():
