@@ -1288,11 +1288,9 @@ def show_visualizations():
 
             else:
                 # Pre-generation section
-                st.markdown("### ⚡ Pre-Generate Visualizations (Parallel)")
+                st.markdown("### ⚡ Visualizations")
 
-                st.info("💡 **Tip:** Pre-generation runs outside Streamlit and can use true multiprocessing for much faster generation.")
-
-                col1, col2 = st.columns([2, 1])
+                col1, col2, col3 = st.columns([2, 1, 1])
 
                 with col1:
                     pregen_samples = st.number_input(
@@ -1303,7 +1301,17 @@ def show_visualizations():
                     )
 
                 with col2:
-                    if st.button("🚀 Pre-Generate All Clusters", type="primary", help="Run standalone script with true parallelization"):
+                    import multiprocessing
+                    detected_cores = multiprocessing.cpu_count()
+                    pregen_jobs = st.number_input(
+                        "CPU Cores",
+                        1, 32, min(detected_cores, 20),
+                        key="pregen_jobs",
+                        help=f"Number of CPU cores to use. Detected: {detected_cores} cores. Recommended: use all available cores for fastest generation."
+                    )
+
+                with col3:
+                    if st.button("Visualize Clusters", type="primary", help="Run standalone script with true parallelization"):
                         # Find the matching data file
                         from src.storage import ResultsStorage
                         temp_storage = ResultsStorage()
@@ -1368,10 +1376,11 @@ def show_visualizations():
                                     sys.executable,  # Use same Python interpreter as Streamlit
                                     "tools/pregenerate_viz.py",
                                     "--results", str(results_pkl_path),
-                                    "--samples", str(pregen_samples)
+                                    "--samples", str(pregen_samples),
+                                    "--jobs", str(pregen_jobs)
                                 ]
 
-                                with st.spinner(f"Pre-generating {n_clusters} clusters with {pregen_samples} samples each..."):
+                                with st.spinner(f"Pre-generating {n_clusters} clusters with {pregen_samples} samples each using {pregen_jobs} cores..."):
                                     result_proc = subp.run(cmd, capture_output=True, text=True)
 
                                     if result_proc.returncode == 0:
@@ -1390,186 +1399,29 @@ def show_visualizations():
 
                 # Show available clusters using actual IDs from labels
                 available_clusters = actual_cluster_ids
-                st.info(f"📊 This run has **{n_clusters}** clusters (IDs: {', '.join(map(str, available_clusters))})")
+                st.info(f"📊 This run has **{n_clusters}** clusters")
 
-                # Initialize or reset session state for selected clusters
-                # Reset if run_id changed or if stored clusters are invalid for this run
-                if ('selected_clusters' not in st.session_state or
-                    'last_viz_run_id' not in st.session_state or
-                    st.session_state.last_viz_run_id != run_id or
-                    not all(c in available_clusters for c in st.session_state.selected_clusters)):
-                    st.session_state.selected_clusters = available_clusters[:min(3, n_clusters)]
-                    st.session_state.last_viz_run_id = run_id
-
-                # Use multiselect for cluster selection
-                selected_clusters = st.multiselect(
-                    "Select Cluster IDs",
-                    options=available_clusters,
-                    default=st.session_state.selected_clusters,
-                    help="Select which clusters to visualize. You can choose multiple clusters to compare their patterns."
-                )
-
-                # Update session state
-                st.session_state.selected_clusters = selected_clusters
-
-                # Select/Deselect buttons in a row
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("✅ Select All", key="select_all_clusters", width='stretch'):
-                        st.session_state.selected_clusters = available_clusters.copy()
-                        st.rerun()
-
-                with col2:
-                    if st.button("❌ Deselect All", key="deselect_all_clusters", width='stretch'):
-                        st.session_state.selected_clusters = []
-                        st.rerun()
-
-                # Samples slider
-                n_samples = st.slider(
-                    "Samples per Cluster",
-                    1, 50, 5,
-                    help="How many random examples to show from each cluster. More samples give better sense of cluster variation."
-                )
+                # Automatically use all available clusters
+                selected_clusters = available_clusters
 
                 st.markdown("---")
 
-                # Parallel processing settings (matching grid search UI)
-                st.markdown("### ⚡ Parallel Rendering")
+                # Show cached visualizations if they exist
+                if cache_exists:
+                    st.markdown("### 📊 Cluster Visualizations")
 
-                import multiprocessing
-                cpu_count = multiprocessing.cpu_count()
+                    st.info(f"Displaying all {len(selected_clusters)} cluster(s)")
 
-                col1, col2 = st.columns(2)
+                    # Display each cluster in a single column (stacked vertically)
+                    for cluster_id in selected_clusters:
+                        img_path = cache_dir / f"cluster_{cluster_id}.png"
 
-                with col1:
-                    use_parallel_viz = st.checkbox(
-                        "Enable Parallel Rendering",
-                        value=True,
-                        help="Render patterns in parallel for faster visualization. Uses threading backend for Streamlit compatibility.",
-                        key="viz_parallel"
-                    )
-
-                    if use_parallel_viz:
-                        st.info(f"ℹ️ Using threading backend (Streamlit-compatible)")
-
-                with col2:
-                    if use_parallel_viz:
-                        # Use conservative default of 2 workers, max 24 (same as grid search)
-                        default_jobs = 2
-                        n_jobs_viz = st.number_input(
-                            "Number of Parallel Jobs",
-                            1, 24, default_jobs,
-                            key="n_jobs_viz",
-                            help=f"Number of threads to use (recommended: 2-4 for stability, max 24). System has {cpu_count} cores."
-                        )
-                    else:
-                        n_jobs_viz = 1
-
-                # Show execution plan with job utilization
-                if use_parallel_viz:
-                    estimated_patterns = len(selected_clusters) * n_samples
-                    batches = (estimated_patterns + n_jobs_viz - 1) // n_jobs_viz  # Ceiling division
-                    st.info(f"📊 Rendering **{estimated_patterns}** patterns | Using **{n_jobs_viz}** parallel jobs (~{batches} batches)")
-                else:
-                    st.info(f"📊 Rendering **{len(selected_clusters) * n_samples}** patterns (sequential)")
-
-                st.markdown("---")
-
-                # Only show button if clusters are selected
-                if not selected_clusters:
-                    st.warning("⚠️ Please select at least one cluster to visualize.")
-                elif st.button(
-                    "Generate Pattern Visualization",
-                    help="Creates candlestick charts showing actual OHLCV patterns from each cluster."
-                ):
-                    try:
-                        from tools.visualize_clusters import ClusterVisualizer
-
-                        cluster_list = selected_clusters
-
-                        with st.spinner("Generating patterns..."):
-                            visualizer = ClusterVisualizer(results_dir=str(Config.RESULTS_DIR))
-
-                            # Try to determine correct data by checking expected window count
-                            # Load labels to get expected count
-                            from src.storage import ResultsStorage
-                            temp_storage = ResultsStorage()
-                            labels, config = temp_storage.load_labels(int(run_id))
-                            expected_windows = len(labels)
-                            window_size = config['window_size']
-                            expected_bars = expected_windows + window_size - 1
-
-                            st.info(f"Looking for data file with ~{expected_bars} bars (creates {expected_windows} windows with window_size={window_size})")
-
-                            # Check data files
-                            data_files = list(Config.DATA_DIR.glob("*.csv"))
-                            best_match = None
-                            min_diff = float('inf')
-
-                            if data_files:
-                                for data_file in data_files:
-                                    try:
-                                        df_temp = pd.read_csv(data_file)
-                                        n_bars = len(df_temp)
-                                        diff = abs(n_bars - expected_bars)
-                                        if diff < min_diff:
-                                            min_diff = diff
-                                            best_match = data_file
-                                    except:
-                                        continue
-
-                                if best_match:
-                                    ohlcv_df = pd.read_csv(best_match)
-                                    st.info(f"Using data from: {best_match.name} ({len(ohlcv_df)} bars)")
-                                else:
-                                    st.warning("No suitable data file found, using first available")
-                                    ohlcv_df = pd.read_csv(data_files[0])
-                                    st.info(f"Using data from: {data_files[0].name} ({len(ohlcv_df)} bars)")
-                            else:
-                                # Generate synthetic data
-                                from main import generate_synthetic_ohlcv
-                                ohlcv_df = generate_synthetic_ohlcv(n_bars=expected_bars, seed=42)
-                                st.info(f"Using synthetic OHLCV data ({expected_bars} bars)")
-
-                            # Generate output path
-                            output_path = Config.RESULTS_DIR / "visualizations" / f"clusters_run{int(run_id):04d}.png"
-
-                            # Plot cluster samples with GUI-configured parallel settings
-                            # Try parallel first, fall back to sequential if it fails
-                            result_path = None
-                            try:
-                                result_path = visualizer.plot_cluster_samples(
-                                    run_id=int(run_id),
-                                    ohlcv_df=ohlcv_df,
-                                    cluster_ids=cluster_list,
-                                    n_samples=n_samples,
-                                    output_path=str(output_path),
-                                    show=False,
-                                    use_parallel=use_parallel_viz,
-                                    n_jobs=n_jobs_viz
-                                )
-                            except (BrokenPipeError, OSError) as e:
-                                # Parallel execution failed, fall back to sequential
-                                st.warning(f"⚠️ Parallel rendering failed ({str(e)}), falling back to sequential mode...")
-                                result_path = visualizer.plot_cluster_samples(
-                                    run_id=int(run_id),
-                                    ohlcv_df=ohlcv_df,
-                                    cluster_ids=cluster_list,
-                                    n_samples=n_samples,
-                                    output_path=str(output_path),
-                                    show=False,
-                                    use_parallel=False,
-                                    n_jobs=1
-                                )
-
-                            if result_path:
-                                st.success(f"Patterns saved to {result_path}")
-                                st.image(str(result_path))
-                    except Exception as e:
-                        st.error(f"Error generating patterns: {e}")
-                        import traceback
-                        with st.expander("Show error details"):
-                            st.code(traceback.format_exc())
+                        if img_path.exists():
+                            cluster_size = cache_metadata['cluster_sizes'].get(cluster_id, '?')
+                            st.markdown(f"**Cluster {cluster_id}** (Size: {cluster_size})")
+                            st.image(str(img_path), use_container_width=True)
+                        else:
+                            st.warning(f"Image not found for cluster {cluster_id}")
 
 
 def show_logs():
