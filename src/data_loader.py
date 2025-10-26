@@ -133,17 +133,21 @@ class OHLCVDataLoader:
     def create_windows(
         self,
         window_size: int,
+        stride: int = 1,
         batch_size: Optional[int] = None
     ) -> Union[npt.NDArray[np.float64], Generator[npt.NDArray[np.float64], None, None]]:
         """
         Create rolling N-bar windows from OHLCV data.
 
-        Uses a sliding window approach with stride=1 to create overlapping
-        windows. Each window contains [Open, High, Low, Close] values.
-        Volume is excluded from the windows.
+        Uses a sliding window approach with configurable stride. Each window
+        contains [Open, High, Low, Close] values. Volume is excluded.
 
         Args:
             window_size: Number of bars per window
+            stride: Step size between consecutive windows (default: 1)
+                   - stride=1: Maximum overlap (traditional sliding window)
+                   - stride=window_size: No overlap between windows
+                   - stride=window_size//2: 50% overlap
             batch_size: If provided, returns generator yielding batches instead of full array
                        (useful for very large datasets to save memory)
 
@@ -152,46 +156,64 @@ class OHLCVDataLoader:
             If batch_size is specified, returns a generator yielding batches
 
         Raises:
-            ValueError: If window_size is invalid
+            ValueError: If window_size or stride is invalid
 
         Examples:
             >>> loader = OHLCVDataLoader(df)
-            >>> windows = loader.create_windows(10)
+            >>> # Traditional sliding window (stride=1)
+            >>> windows = loader.create_windows(10, stride=1)
             >>> print(windows.shape)
-            (991, 10, 4)  # For 1000 bars with window_size=10
+            (991, 10, 4)  # For 1000 bars: (1000-10+1) windows
 
-            >>> # Memory-efficient batch processing
-            >>> for batch in loader.create_windows(10, batch_size=1000):
-            ...     process_batch(batch)
+            >>> # No overlap (stride=window_size)
+            >>> windows = loader.create_windows(10, stride=10)
+            >>> print(windows.shape)
+            (100, 10, 4)  # For 1000 bars: 100 non-overlapping windows
+
+            >>> # 50% overlap
+            >>> windows = loader.create_windows(10, stride=5)
+            >>> print(windows.shape)
+            (199, 10, 4)  # For 1000 bars with 50% overlap
         """
         if window_size < 1:
             raise ValueError(f"window_size must be >= 1, got {window_size}")
+
+        if stride < 1:
+            raise ValueError(f"stride must be >= 1, got {stride}")
 
         if window_size > len(self.df):
             raise ValueError(
                 f"window_size ({window_size}) exceeds data length ({len(self.df)})"
             )
 
-        n_windows = len(self.df) - window_size + 1
+        # Calculate number of windows with stride
+        n_windows = (len(self.df) - window_size) // stride + 1
 
         # Memory-efficient batch processing
         if batch_size is not None:
             logger.info(
-                f"Creating {n_windows} windows of size {window_size} in batches of {batch_size}"
+                f"Creating {n_windows} windows of size {window_size} (stride={stride}) in batches of {batch_size}"
             )
-            return self._create_windows_generator(window_size, batch_size)
+            return self._create_windows_generator(window_size, stride, batch_size)
 
         # Standard all-at-once processing
         ohlc_data = self.df[['Open', 'High', 'Low', 'Close']].values
 
-        # Create sliding windows using numpy stride tricks
-        windows = np.lib.stride_tricks.sliding_window_view(
-            ohlc_data,
-            window_shape=(window_size, 4)
-        ).squeeze(axis=1)
+        if stride == 1:
+            # Use efficient sliding_window_view for stride=1
+            windows = np.lib.stride_tricks.sliding_window_view(
+                ohlc_data,
+                window_shape=(window_size, 4)
+            ).squeeze(axis=1)
+        else:
+            # For stride > 1, manually extract windows
+            windows = np.array([
+                ohlc_data[i:i+window_size]
+                for i in range(0, len(ohlc_data) - window_size + 1, stride)
+            ])
 
         logger.info(
-            f"Created {n_windows} windows of size {window_size} "
+            f"Created {n_windows} windows of size {window_size} (stride={stride}) "
             f"from {len(self.df)} bars"
         )
         logger.debug(f"Windows shape: {windows.shape}")
@@ -201,6 +223,7 @@ class OHLCVDataLoader:
     def _create_windows_generator(
         self,
         window_size: int,
+        stride: int,
         batch_size: int
     ) -> Generator[npt.NDArray[np.float64], None, None]:
         """
@@ -208,21 +231,26 @@ class OHLCVDataLoader:
 
         Args:
             window_size: Number of bars per window
+            stride: Step size between consecutive windows
             batch_size: Number of windows per batch
 
         Yields:
             Batch of windows with shape (batch_size, window_size, 4)
         """
         ohlc_data = self.df[['Open', 'High', 'Low', 'Close']].values
-        n_windows = len(ohlc_data) - window_size + 1
+        max_start_idx = len(ohlc_data) - window_size
 
-        for start_idx in range(0, n_windows, batch_size):
-            end_idx = min(start_idx + batch_size, n_windows)
+        # Generate window start indices with stride
+        window_indices = list(range(0, max_start_idx + 1, stride))
+        n_windows = len(window_indices)
+
+        for batch_start in range(0, n_windows, batch_size):
+            batch_end = min(batch_start + batch_size, n_windows)
             batch = np.array([
-                ohlc_data[i:i+window_size]
-                for i in range(start_idx, end_idx)
+                ohlc_data[window_indices[i]:window_indices[i]+window_size]
+                for i in range(batch_start, batch_end)
             ])
-            logger.debug(f"Yielding batch {start_idx//batch_size + 1}: windows {start_idx}-{end_idx-1}")
+            logger.debug(f"Yielding batch {batch_start//batch_size + 1}: windows {batch_start}-{batch_end-1}")
             yield batch
 
     def get_window_indices(self, window_size: int) -> npt.NDArray[np.int64]:

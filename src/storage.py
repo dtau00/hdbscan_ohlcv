@@ -179,6 +179,7 @@ class ResultsStorage:
 
             # Configuration parameters
             'window_size': config['window_size'],
+            'stride': config.get('stride', 1),  # Default to 1 if not present (backwards compatibility)
             'min_cluster_size': config['min_cluster_size'],
             'min_samples': config['min_samples'],
             'metric': config['metric'],

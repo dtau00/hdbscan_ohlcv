@@ -45,6 +45,7 @@ class Config:
 
     # HDBSCAN parameter grids
     WINDOW_SIZES = [10, 15]
+    WINDOW_STRIDES = [1, 5, 10]  # Stride for sliding windows (1=every bar, 10=no overlap)
     MIN_CLUSTER_SIZES = [5, 10]
     MIN_SAMPLES_OPTIONS = [6, 10]
     METRICS = ["euclidean"]  # Can expand to ["euclidean", "manhattan", "cosine"]
@@ -74,6 +75,7 @@ class Config:
         """
         required_keys = ['window_size', 'min_cluster_size', 'min_samples',
                         'metric', 'cluster_selection_method']
+        # stride is optional, will default to 1 if not provided
 
         # Check all required keys present
         for key in required_keys:
@@ -104,6 +106,17 @@ class Config:
                 f"min_samples ({config['min_samples']}) must be <= "
                 f"min_cluster_size ({config['min_cluster_size']})"
             )
+
+        # Validate stride if present (optional parameter)
+        if 'stride' in config:
+            if not isinstance(config['stride'], int) or config['stride'] < 1:
+                raise ValueError(
+                    f"stride must be positive integer, got {config['stride']}"
+                )
+            if config['stride'] > config['window_size']:
+                raise ValueError(
+                    f"stride ({config['stride']}) should be <= window_size ({config['window_size']})"
+                )
 
         # Validate metric
         valid_metrics = ['euclidean', 'manhattan', 'cosine', 'minkowski']
@@ -189,6 +202,7 @@ class Config:
         Returns:
             List of configuration dictionaries, each containing:
                 - window_size: int
+                - stride: int (defaults to 1)
                 - min_cluster_size: int
                 - min_samples: int
                 - metric: str
@@ -197,20 +211,26 @@ class Config:
         configs = []
 
         for window_size in cls.WINDOW_SIZES:
-            for min_cluster_size in cls.MIN_CLUSTER_SIZES:
-                for min_samples in cls.MIN_SAMPLES_OPTIONS:
-                    for metric in cls.METRICS:
-                        for cluster_selection_method in cls.CLUSTER_SELECTION_METHODS:
-                            # Validate: min_samples should be <= min_cluster_size
-                            if min_samples <= min_cluster_size:
-                                config = {
-                                    'window_size': window_size,
-                                    'min_cluster_size': min_cluster_size,
-                                    'min_samples': min_samples,
-                                    'metric': metric,
-                                    'cluster_selection_method': cluster_selection_method,
-                                }
-                                configs.append(config)
+            for stride in cls.WINDOW_STRIDES:
+                # Skip invalid combinations where stride > window_size
+                if stride > window_size:
+                    continue
+
+                for min_cluster_size in cls.MIN_CLUSTER_SIZES:
+                    for min_samples in cls.MIN_SAMPLES_OPTIONS:
+                        for metric in cls.METRICS:
+                            for cluster_selection_method in cls.CLUSTER_SELECTION_METHODS:
+                                # Validate: min_samples should be <= min_cluster_size
+                                if min_samples <= min_cluster_size:
+                                    config = {
+                                        'window_size': window_size,
+                                        'stride': stride,
+                                        'min_cluster_size': min_cluster_size,
+                                        'min_samples': min_samples,
+                                        'metric': metric,
+                                        'cluster_selection_method': cluster_selection_method,
+                                    }
+                                    configs.append(config)
 
         return configs
 
@@ -231,8 +251,10 @@ class Config:
             >>> print(Config.config_to_string(config))
             ws=10_mcs=5_ms=6_euclidean_eom
         """
+        stride = config.get('stride', 1)
         return (
             f"ws={config['window_size']}_"
+            f"stride={stride}_"
             f"mcs={config['min_cluster_size']}_"
             f"ms={config['min_samples']}_"
             f"{config['metric']}_"
@@ -259,8 +281,10 @@ class Config:
             >>> print(config_id)
             ws10_mcs5_ms6_euclidean_eom
         """
+        stride = config.get('stride', 1)
         return (
             f"ws{config['window_size']}_"
+            f"s{stride}_"
             f"mcs{config['min_cluster_size']}_"
             f"ms{config['min_samples']}_"
             f"{config['metric']}_"

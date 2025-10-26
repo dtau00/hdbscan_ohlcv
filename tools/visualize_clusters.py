@@ -126,7 +126,7 @@ def _render_single_pattern(
         Tuple of (rendered image as numpy array, title)
     """
     # Create a small figure for this pattern
-    fig, ax = plt.subplots(figsize=(3, 2.5))
+    fig, ax = plt.subplots(figsize=(3, 4))
 
     window_size = len(window)
 
@@ -173,7 +173,14 @@ def _render_single_pattern(
 
     # Formatting
     ax.set_xlim(-0.5, window_size - 0.5)
-    ax.set_ylim(window.min() * 0.995, window.max() * 1.005)
+
+    # Set Y-axis limits with 10% margin for better visibility
+    data_min = window.min()
+    data_max = window.max()
+    data_range = data_max - data_min
+    margin = data_range * 0.1
+    ax.set_ylim(data_min - margin, data_max + margin)
+
     ax.set_title(title, fontsize=9, pad=5)
     ax.set_xlabel('Bar', fontsize=8)
     ax.set_ylabel('Price', fontsize=8)
@@ -240,7 +247,7 @@ def _render_cluster_image(
 
     with open(debug_log, 'a') as f:
         f.write(f"[{time.strftime('%H:%M:%S')}] Cluster {cluster_id} | Creating figure with {n_cols} columns\n")
-    fig, axes = plt.subplots(1, n_cols, figsize=(n_cols * 3, 2.5), squeeze=False)
+    fig, axes = plt.subplots(1, n_cols, figsize=(n_cols * 3, 4), squeeze=False)
 
     # Plot each sample in this cluster
     for col_idx, window_idx in enumerate(sampled_indices):
@@ -288,7 +295,13 @@ def _render_cluster_image(
 
         # Formatting
         ax.set_xlim(-0.5, window_size - 0.5)
-        ax.set_ylim(window.min() * 0.995, window.max() * 1.005)
+
+        # Set Y-axis limits with 10% margin for better visibility
+        data_min = window.min()
+        data_max = window.max()
+        data_range = data_max - data_min
+        margin = data_range * 0.1
+        ax.set_ylim(data_min - margin, data_max + margin)
 
         # Create title
         if col_idx == 0:
@@ -385,8 +398,9 @@ class ClusterVisualizer:
             raise RuntimeError("Data loader not initialized")
 
         window_size = config['window_size']
+        stride = config.get('stride', 1)  # Get stride from config, default to 1
         # Always create windows without batch_size to get the full array
-        windows_result = self.data_loader.create_windows(window_size)
+        windows_result = self.data_loader.create_windows(window_size, stride=stride)
 
         # Ensure we have an array, not a generator
         if not isinstance(windows_result, np.ndarray):
@@ -624,7 +638,14 @@ class ClusterVisualizer:
 
         # Formatting
         ax.set_xlim(-0.5, window_size - 0.5)
-        ax.set_ylim(window.min() * 0.995, window.max() * 1.005)
+
+        # Set Y-axis limits with 10% margin for better visibility
+        data_min = window.min()
+        data_max = window.max()
+        data_range = data_max - data_min
+        margin = data_range * 0.1
+        ax.set_ylim(data_min - margin, data_max + margin)
+
         ax.set_title(title, fontsize=9, pad=5)
         ax.set_xlabel('Bar', fontsize=8)
         ax.set_ylabel('Price', fontsize=8)
@@ -710,7 +731,7 @@ class ClusterVisualizer:
         # Calculate figure size if not provided
         if figsize is None:
             fig_width = n_cols * 3 + 1
-            fig_height = n_rows * 2.5 + 1
+            fig_height = n_rows * 4 + 1
             figsize = (int(fig_width), int(fig_height))
 
         # Create figure and axes

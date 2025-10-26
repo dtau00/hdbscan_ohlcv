@@ -69,7 +69,7 @@ def _render_cluster_image_impl(
 
     # Create figure for this cluster
     n_cols = len(sampled_indices)
-    fig, axes = plt.subplots(1, n_cols, figsize=(3.5 * n_cols, 3.5))
+    fig, axes = plt.subplots(1, n_cols, figsize=(3.5 * n_cols, 5))
     if n_cols == 1:
         axes = [axes]
 
@@ -126,7 +126,14 @@ def _render_cluster_image_impl(
 
         # Formatting
         ax.set_xlim(-0.5, window_len - 0.5)
-        ax.set_ylim(window.min() * 0.995, window.max() * 1.005)
+
+        # Set Y-axis limits with 10% margin for better visibility
+        data_min = window.min()
+        data_max = window.max()
+        data_range = data_max - data_min
+        margin = data_range * 0.1
+        ax.set_ylim(data_min - margin, data_max + margin)
+
         ax.set_title(f'Sample {col_idx + 1}', fontsize=10, pad=5)
         ax.set_xlabel('Bar', fontsize=9)
         ax.set_ylabel('Price', fontsize=9)
@@ -191,8 +198,8 @@ def get_cluster_info(results: Dict) -> Dict[int, Dict]:
     return cluster_info
 
 
-def sample_cluster_indices(cluster_info: Dict[int, Dict], n_samples: int) -> Dict[int, npt.NDArray]:
-    """Sample indices for each cluster."""
+def sample_cluster_indices(cluster_info: Dict[int, Dict], n_samples: int, windows: npt.NDArray, window_size: int) -> Dict[int, npt.NDArray]:
+    """Sample representative (temporally separated) indices for each cluster."""
     sampled = {}
 
     for cluster_id, info in cluster_info.items():
@@ -202,12 +209,79 @@ def sample_cluster_indices(cluster_info: Dict[int, Dict], n_samples: int) -> Dic
         if n_available <= n_samples:
             sampled[cluster_id] = indices
         else:
-            # Sample evenly across the cluster
-            step = n_available / n_samples
-            sampled_idx = [int(i * step) for i in range(n_samples)]
-            sampled[cluster_id] = indices[sampled_idx]
+            # Use representative sampling with temporal separation
+            sampled[cluster_id] = sample_cluster_representatives(
+                indices, windows, n_samples, min_distance=window_size
+            )
 
     return sampled
+
+
+def sample_cluster_representatives(
+    cluster_indices: npt.NDArray[np.int64],
+    windows: npt.NDArray[np.float64],
+    n_samples: int,
+    min_distance: int
+) -> npt.NDArray[np.int64]:
+    """
+    Sample representative (non-overlapping) indices from a cluster.
+
+    This prevents selecting temporally adjacent windows that are essentially
+    the same pattern shifted by one bar.
+
+    Args:
+        cluster_indices: Array of indices belonging to cluster
+        windows: All OHLCV windows array
+        n_samples: Number of samples to draw
+        min_distance: Minimum temporal distance between samples (in window indices)
+
+    Returns:
+        Array of sampled indices that are temporally separated
+    """
+    if len(cluster_indices) <= n_samples:
+        return cluster_indices
+
+    # Get cluster windows
+    cluster_windows = windows[cluster_indices]
+
+    # Compute centroid of cluster
+    centroid = cluster_windows.mean(axis=0)
+
+    # Compute distances to centroid for all cluster members
+    cluster_windows_flat = cluster_windows.reshape(len(cluster_windows), -1)
+    centroid_flat = centroid.reshape(1, -1)
+
+    distances = np.sqrt(np.sum((cluster_windows_flat - centroid_flat) ** 2, axis=1))
+
+    # Create array of (index, distance) pairs, sorted by distance
+    index_distance_pairs = list(zip(cluster_indices, distances))
+    index_distance_pairs.sort(key=lambda x: x[1])  # Sort by distance to centroid
+
+    # Greedy selection: pick samples that are far enough apart
+    selected_indices = []
+    for idx, dist in index_distance_pairs:
+        # Check if this index is far enough from all already selected indices
+        if not selected_indices or all(abs(idx - sel_idx) >= min_distance for sel_idx in selected_indices):
+            selected_indices.append(idx)
+
+            # Stop if we have enough samples
+            if len(selected_indices) >= n_samples:
+                break
+
+    # If we couldn't find enough separated samples, fill with closest remaining
+    if len(selected_indices) < n_samples:
+        logger.warning(
+            f"Could only find {len(selected_indices)} separated samples "
+            f"(requested {n_samples}) with min_distance={min_distance}"
+        )
+        # Add remaining closest samples that haven't been selected
+        for idx, dist in index_distance_pairs:
+            if idx not in selected_indices:
+                selected_indices.append(idx)
+                if len(selected_indices) >= n_samples:
+                    break
+
+    return np.array(sorted(selected_indices), dtype=np.int64)
 
 
 def generate_images_parallel(
@@ -341,8 +415,12 @@ def main():
     # Get cluster information
     cluster_info = get_cluster_info(results)
 
-    # Sample indices
-    sampled_indices = sample_cluster_indices(cluster_info, args.samples)
+    # Determine window size (needed for representative sampling)
+    # Try to get from results, otherwise estimate from windows shape
+    window_size = results.get('config', {}).get('window_size', windows.shape[1])
+
+    # Sample indices with temporal separation
+    sampled_indices = sample_cluster_indices(cluster_info, args.samples, windows, window_size)
 
     # Generate images in parallel
     images = generate_images_parallel(

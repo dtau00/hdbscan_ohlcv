@@ -295,7 +295,7 @@ def show_configure_run():
 
         st.markdown("### ⚙️ HDBSCAN Parameters")
 
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
 
         with col1:
             st.markdown("**Window Sizes**")
@@ -307,6 +307,15 @@ def show_configure_run():
             )
 
         with col2:
+            st.markdown("**Strides**")
+            strides = st.multiselect(
+                "Select window strides",
+                [1, 5, 10, 15],
+                default=[1],
+                help="Step size between windows. stride=1: max overlap (slower). stride=window_size: no overlap (faster, less redundancy)."
+            )
+
+        with col3:
             st.markdown("**Min Cluster Sizes**")
             min_cluster_sizes = st.multiselect(
                 "Select min cluster sizes",
@@ -315,7 +324,7 @@ def show_configure_run():
                 help="Minimum cluster sizes to try. Smaller values find more granular patterns, larger values find major patterns."
             )
 
-        with col3:
+        with col4:
             st.markdown("**Min Samples**")
             min_samples_options = st.multiselect(
                 "Select min samples",
@@ -367,7 +376,7 @@ def show_configure_run():
                 n_jobs = 1
 
         # Calculate total configs
-        total_configs = len(window_sizes) * len(min_cluster_sizes) * len(min_samples_options) * len(metrics_grid)
+        total_configs = len(window_sizes) * len(strides) * len(min_cluster_sizes) * len(min_samples_options) * len(metrics_grid)
 
         # Show execution plan with job utilization
         if data_files and selected_file_names:
@@ -390,6 +399,7 @@ def show_configure_run():
             else:
                 run_grid_search(
                     window_sizes=window_sizes,
+                    strides=strides,
                     min_cluster_sizes=min_cluster_sizes,
                     min_samples_options=min_samples_options,
                     metrics=metrics_grid,
@@ -689,7 +699,7 @@ def download_from_binance(symbol: str, interval: str, start_date, end_date, run_
                 st.code(traceback.format_exc())
 
 
-def run_grid_search(window_sizes, min_cluster_sizes, min_samples_options, metrics, n_bars, selected_files=None, use_parallel=False, n_jobs=1):
+def run_grid_search(window_sizes, strides, min_cluster_sizes, min_samples_options, metrics, n_bars, selected_files=None, use_parallel=False, n_jobs=1):
     """Run grid search with multiple configurations across multiple files."""
     import time
 
@@ -699,17 +709,23 @@ def run_grid_search(window_sizes, min_cluster_sizes, min_samples_options, metric
     # Generate configs
     configs = []
     for ws in window_sizes:
-        for mcs in min_cluster_sizes:
-            for ms in min_samples_options:
-                for m in metrics:
-                    if ms <= mcs:  # Validate constraint
-                        configs.append({
-                            'window_size': ws,
-                            'min_cluster_size': mcs,
-                            'min_samples': ms,
-                            'metric': m,
-                            'cluster_selection_method': 'eom'
-                        })
+        for stride in strides:
+            # Skip invalid combinations where stride > window_size
+            if stride > ws:
+                continue
+
+            for mcs in min_cluster_sizes:
+                for ms in min_samples_options:
+                    for m in metrics:
+                        if ms <= mcs:  # Validate constraint
+                            configs.append({
+                                'window_size': ws,
+                                'stride': stride,
+                                'min_cluster_size': mcs,
+                                'min_samples': ms,
+                                'metric': m,
+                                'cluster_selection_method': 'eom'
+                            })
 
     if not configs:
         st.error("No valid configurations generated!")
@@ -1343,7 +1359,8 @@ def show_visualizations():
                             import numpy as np_save
                             ohlcv_data_pregen = pd.read_csv(best_match_file)
                             loader = OHLCVDataLoader(ohlcv_data_pregen, copy=False)
-                            windows_result = loader.create_windows(window_size_data)
+                            stride_data = config_data.get('stride', 1)  # Get stride from config
+                            windows_result = loader.create_windows(window_size_data, stride=stride_data)
 
                             # Ensure it's an array, not a generator
                             if not isinstance(windows_result, np_save.ndarray):

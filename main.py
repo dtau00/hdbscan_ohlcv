@@ -180,10 +180,11 @@ def process_single_config(
         Dictionary with run results (run_id, metrics, etc.)
     """
     window_size = config['window_size']
+    stride = config.get('stride', 1)  # Default to 1 if not specified
     config_id = Config.get_config_id(config)
 
     logger.info(f"Processing config: {config_id}")
-    logger.info(f"  Parameters: window_size={window_size}, "
+    logger.info(f"  Parameters: window_size={window_size}, stride={stride}, "
                 f"min_cluster_size={config['min_cluster_size']}, "
                 f"min_samples={config['min_samples']}, "
                 f"metric={config['metric']}, "
@@ -193,8 +194,8 @@ def process_single_config(
         # Step 1: Create windows
         logger.debug("Creating windows...")
         data_loader = OHLCVDataLoader(df_ohlcv)
-        windows = data_loader.create_windows(window_size)
-        logger.info(f"  Created {len(windows)} windows of size {window_size}")
+        windows = data_loader.create_windows(window_size, stride=stride)
+        logger.info(f"  Created {len(windows)} windows of size {window_size} (stride={stride})")
 
         # Step 2: Extract features
         logger.debug("Extracting features...")
