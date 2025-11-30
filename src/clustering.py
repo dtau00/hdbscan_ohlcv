@@ -263,6 +263,11 @@ class HDBSCANClusterer:
         Returns:
             tuple: (labels, clusterer)
         """
+        # Enable prediction data by default if not specified
+        if 'prediction_data' not in kwargs:
+            kwargs['prediction_data'] = True
+            logger.debug("Enabled prediction_data=True for future predictions")
+
         # Initialize CPU HDBSCAN
         clusterer = self.backend_module.HDBSCAN(
             min_cluster_size=min_cluster_size,

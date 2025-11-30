@@ -1,0 +1,24 @@
+{
+  "window_sizes": [
+    10
+  ],
+  "strides": [
+    1
+  ],
+  "min_cluster_sizes": [
+    10,
+    20
+  ],
+  "min_samples_options": [
+    5
+  ],
+  "metrics_grid": [
+    "euclidean"
+  ],
+  "feature_type": "normalized",
+  "n_bars_grid": 1000,
+  "use_parallel": true,
+  "n_jobs": 8,
+  "pregen_samples": 10,
+  "pregen_jobs": null
+}

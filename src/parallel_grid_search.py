@@ -48,7 +48,8 @@ def process_config_wrapper(
     scalers_cache: Dict[int, StandardScaler],
     process_func: Callable,
     file_display: Optional[str] = None,
-    status_file: Optional[str] = None
+    status_file: Optional[str] = None,
+    feature_type: str = 'normalized'
 ) -> Dict[str, Any]:
     """
     Wrapper function for parallel processing of a single configuration.
@@ -122,7 +123,8 @@ def process_config_wrapper(
         backend_module=actual_backend_module,
         storage=storage,
         logger=logger,
-        scalers_cache=scalers_cache
+        scalers_cache=scalers_cache,
+        feature_type=feature_type
     )
 
     # Log completion
@@ -246,7 +248,8 @@ def parallel_multi_file_grid_search(
     process_func: Callable,
     n_jobs: Optional[int] = None,
     verbose: int = 10,
-    status_file: Optional[str] = None
+    status_file: Optional[str] = None,
+    feature_type: str = 'normalized'
 ) -> List[Dict[str, Any]]:
     """
     Execute grid search in parallel across multiple data files.
@@ -297,7 +300,8 @@ def parallel_multi_file_grid_search(
             scalers_cache=scalers_cache,
             process_func=process_func,
             file_display=file_display,
-            status_file=status_file
+            status_file=status_file,
+            feature_type=feature_type
         )
         for config, df_ohlcv, file_display in tasks
     )

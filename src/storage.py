@@ -75,6 +75,9 @@ class ResultsStorage:
         """
         Get the next available run ID by checking existing files.
 
+        This method is only used for initialization. The actual run ID
+        assignment happens in _get_and_increment_run_id() with proper locking.
+
         Returns:
             Next available run ID (integer)
         """
@@ -90,6 +93,52 @@ class ResultsStorage:
         except Exception as e:
             logger.warning(f"Could not read metrics file to get run ID: {e}")
             return 1
+
+    def _get_and_increment_run_id(self) -> int:
+        """
+        Atomically get the next run ID and increment the counter.
+
+        Uses file-based locking to ensure thread-safety and process-safety
+        in parallel execution environments.
+
+        Returns:
+            Unique run ID for this execution
+        """
+        import fcntl
+
+        # Create a lock file for run ID assignment
+        lock_file = Config.METRICS_DIR / ".run_id_lock"
+
+        try:
+            # Open lock file (create if doesn't exist)
+            with open(lock_file, 'a+') as f:
+                # Acquire exclusive lock
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+
+                try:
+                    # Read current max run ID from metrics file
+                    if self.metrics_file.exists():
+                        df = pd.read_csv(self.metrics_file)
+                        if 'run_id' in df.columns and len(df) > 0:
+                            next_id = int(df['run_id'].max()) + 1
+                        else:
+                            next_id = 1
+                    else:
+                        next_id = 1
+
+                    return next_id
+
+                finally:
+                    # Release lock
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+        except Exception as e:
+            logger.error(f"Error getting run ID with locking: {e}")
+            # Fallback to using the counter (may cause duplicates in parallel)
+            logger.warning("Falling back to run_counter (may cause duplicate IDs in parallel mode)")
+            run_id = self.run_counter
+            self.run_counter += 1
+            return run_id
 
     def save_run_results(
         self,
@@ -127,8 +176,8 @@ class ResultsStorage:
             ... )
             >>> print(f"Saved run ID: {run_id}")
         """
-        run_id = self.run_counter
-        self.run_counter += 1
+        # Get unique run ID with file-based locking for parallel safety
+        run_id = self._get_and_increment_run_id()
 
         logger.info(f"Saving results for run {run_id}")
 

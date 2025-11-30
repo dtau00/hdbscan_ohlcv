@@ -36,7 +36,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
+# Custom CSS for styling
 st.markdown("""
 <style>
     .main-header {
@@ -63,6 +63,48 @@ if 'storage' not in st.session_state:
 if 'backend_type' not in st.session_state:
     st.session_state.backend_type, st.session_state.backend_module = detect_compute_backend()
 
+# Initialize form defaults with persistence
+import json
+
+SETTINGS_FILE = Config.PROJECT_ROOT / '.streamlit_settings.json'
+
+default_values = {
+    'window_sizes': [10, 15],
+    'strides': [1],
+    'min_cluster_sizes': [10],
+    'min_samples_options': [6, 10],
+    'metrics_grid': ['euclidean'],
+    'feature_type': 'normalized',
+    'n_bars_grid': 1000,
+    'use_parallel': True,
+    'n_jobs': None,
+    'pregen_samples': 10,
+    'pregen_jobs': None
+}
+
+def load_settings():
+    """Load settings from JSON file."""
+    try:
+        if SETTINGS_FILE.exists():
+            with open(SETTINGS_FILE, 'r') as f:
+                saved = json.load(f)
+                # Merge with defaults to handle new fields
+                return {**default_values, **saved}
+    except Exception as e:
+        st.warning(f"Could not load saved settings: {e}")
+    return default_values.copy()
+
+def save_settings(settings):
+    """Save settings to JSON file."""
+    try:
+        with open(SETTINGS_FILE, 'w') as f:
+            json.dump(settings, f, indent=2)
+    except Exception as e:
+        st.error(f"Could not save settings: {e}")
+
+if 'form_defaults' not in st.session_state:
+    st.session_state.form_defaults = load_settings()
+
 
 def main():
     """Main application entry point."""
@@ -84,6 +126,7 @@ def main():
             "\U0001F6E0 Configure & Run",
             "\U0001F4CA Results Explorer",
             "\U0001F4C8 Visualizations",
+            "\U0001F50D Pattern Matching",
             "\U0001F4C4 Logs",
             "\U0001F4BE Model Manager"
         ]
@@ -102,6 +145,8 @@ def main():
         show_results_explorer()
     elif "\U0001F4C8 Visualizations" in page:
         show_visualizations()
+    elif "\U0001F50D Pattern Matching" in page:
+        show_pattern_matching()
     elif "\U0001F4C4 Logs" in page:
         show_logs()
     elif "\U0001F4BE Model Manager" in page:
@@ -298,54 +343,95 @@ def show_configure_run():
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
-            st.markdown("**Window Sizes**")
             window_sizes = st.multiselect(
                 "Select window sizes",
                 [5, 10, 15, 20, 25, 30],
-                default=[10, 15],
-                help="Pattern lengths to test. Testing multiple sizes helps find the optimal time scale for your data."
+                default=st.session_state.form_defaults['window_sizes'],
+                help="Pattern lengths to test. Testing multiple sizes helps find the optimal time scale for your data.",
+                key="window_sizes_input"
             )
+            if window_sizes != st.session_state.form_defaults['window_sizes']:
+                st.session_state.form_defaults['window_sizes'] = window_sizes
+                save_settings(st.session_state.form_defaults)
 
         with col2:
-            st.markdown("**Strides**")
             strides = st.multiselect(
                 "Select window strides",
                 [1, 5, 10, 15],
-                default=[1],
-                help="Step size between windows. stride=1: max overlap (slower). stride=window_size: no overlap (faster, less redundancy)."
+                default=st.session_state.form_defaults['strides'],
+                help="Step size between windows. stride=1: max overlap (slower). stride=window_size: no overlap (faster, less redundancy).",
+                key="strides_input"
             )
+            if strides != st.session_state.form_defaults['strides']:
+                st.session_state.form_defaults['strides'] = strides
+                save_settings(st.session_state.form_defaults)
 
         with col3:
-            st.markdown("**Min Cluster Sizes**")
             min_cluster_sizes = st.multiselect(
                 "Select min cluster sizes",
                 [5, 10, 15, 20, 25],
-                default=[10],
-                help="Minimum cluster sizes to try. Smaller values find more granular patterns, larger values find major patterns."
+                default=st.session_state.form_defaults['min_cluster_sizes'],
+                help="Minimum cluster sizes to try. Smaller values find more granular patterns, larger values find major patterns.",
+                key="min_cluster_sizes_input"
             )
+            if min_cluster_sizes != st.session_state.form_defaults['min_cluster_sizes']:
+                st.session_state.form_defaults['min_cluster_sizes'] = min_cluster_sizes
+                save_settings(st.session_state.form_defaults)
 
         with col4:
-            st.markdown("**Min Samples**")
             min_samples_options = st.multiselect(
                 "Select min samples",
                 [3, 5, 6, 10, 15],
-                default=[6, 10],
-                help="Core point thresholds to test. Only valid combinations (min_samples ≤ min_cluster_size) will be used."
+                default=st.session_state.form_defaults['min_samples_options'],
+                help="Core point thresholds to test. Only valid combinations (min_samples ≤ min_cluster_size) will be used.",
+                key="min_samples_input"
             )
+            if min_samples_options != st.session_state.form_defaults['min_samples_options']:
+                st.session_state.form_defaults['min_samples_options'] = min_samples_options
+                save_settings(st.session_state.form_defaults)
 
-        metrics_grid = st.multiselect(
-            "Distance Metrics",
-            ["euclidean", "manhattan", "cosine"],
-            default=["euclidean"],
-            help="Distance measures to compare. Euclidean is standard. Try cosine for shape-based clustering."
-        )
+        col1, col2 = st.columns(2)
+
+        with col1:
+            metrics_grid = st.multiselect(
+                "Distance Metrics",
+                ["euclidean", "manhattan", "cosine"],
+                default=st.session_state.form_defaults['metrics_grid'],
+                help="Distance measures to compare. Euclidean is standard. Try cosine for shape-based clustering.",
+                key="metrics_input"
+            )
+            if metrics_grid != st.session_state.form_defaults['metrics_grid']:
+                st.session_state.form_defaults['metrics_grid'] = metrics_grid
+                save_settings(st.session_state.form_defaults)
+
+        with col2:
+            feature_type_options = ["normalized", "flatten", "returns"]
+            default_idx = feature_type_options.index(st.session_state.form_defaults['feature_type'])
+            feature_type = st.selectbox(
+                "Feature Type",
+                feature_type_options,
+                index=default_idx,
+                help="Feature extraction method:\n"
+                     "• normalized: Normalize to first bar (best for shape patterns)\n"
+                     "• flatten: Raw OHLC values (clusters by price level)\n"
+                     "• returns: Percentage changes (clusters by momentum)",
+                key="feature_type_input"
+            )
+            if feature_type != st.session_state.form_defaults['feature_type']:
+                st.session_state.form_defaults['feature_type'] = feature_type
+                save_settings(st.session_state.form_defaults)
 
         n_bars_grid = st.number_input(
             "Number of Bars",
-            100, 100000, 1000, 100,
+            100, 100000,
+            st.session_state.form_defaults['n_bars_grid'],
+            100,
             key="grid_n_bars",
             help="Total bars to use for all grid search runs. Same dataset will be used for all configurations."
         )
+        if n_bars_grid != st.session_state.form_defaults['n_bars_grid']:
+            st.session_state.form_defaults['n_bars_grid'] = n_bars_grid
+            save_settings(st.session_state.form_defaults)
 
         # Parallel execution settings
         st.markdown("### \u26A1 Parallel Execution")
@@ -354,9 +440,13 @@ def show_configure_run():
         with col1:
             use_parallel = st.checkbox(
                 "Enable Parallel Execution",
-                value=True,
-                help="Run grid search configurations in parallel using multiple CPU cores for faster execution. Note: Parallel mode uses CPU-only (GPU acceleration is only available in sequential mode)."
+                value=st.session_state.form_defaults['use_parallel'],
+                help="Run grid search configurations in parallel using multiple CPU cores for faster execution. Note: Parallel mode uses CPU-only (GPU acceleration is only available in sequential mode).",
+                key="use_parallel_input"
             )
+            if use_parallel != st.session_state.form_defaults['use_parallel']:
+                st.session_state.form_defaults['use_parallel'] = use_parallel
+                save_settings(st.session_state.form_defaults)
 
             if use_parallel and st.session_state.backend_type == 'gpu':
                 st.info("ℹ️ Parallel execution will use CPU-only mode (CUDA contexts cannot be shared across processes)")
@@ -365,13 +455,18 @@ def show_configure_run():
             if use_parallel:
                 import multiprocessing
                 cpu_count = multiprocessing.cpu_count()
-                default_jobs = min(cpu_count, 24)
+                if st.session_state.form_defaults['n_jobs'] is None:
+                    st.session_state.form_defaults['n_jobs'] = min(cpu_count, 24)
                 n_jobs = st.number_input(
                     "Number of Parallel Jobs",
-                    1, 24, default_jobs,
-                    key="n_jobs",
+                    1, 24,
+                    st.session_state.form_defaults['n_jobs'],
+                    key="n_jobs_input",
                     help=f"Number of CPU cores to use (max 24). System has {cpu_count} cores."
                 )
+                if n_jobs != st.session_state.form_defaults['n_jobs']:
+                    st.session_state.form_defaults['n_jobs'] = n_jobs
+                    save_settings(st.session_state.form_defaults)
             else:
                 n_jobs = 1
 
@@ -406,7 +501,8 @@ def show_configure_run():
                     n_bars=n_bars_grid,
                     selected_files=selected_file_names if data_files else None,
                     use_parallel=use_parallel,
-                    n_jobs=n_jobs if use_parallel else 1
+                    n_jobs=n_jobs if use_parallel else 1,
+                    feature_type=feature_type
                 )
 
     # Tab 2: Data Management
@@ -683,7 +779,8 @@ def download_from_binance(symbol: str, interval: str, start_date, end_date, run_
                         backend_module=st.session_state.backend_module,
                         storage=st.session_state.storage,
                         logger=logger,
-                        scalers_cache={}
+                        scalers_cache={},
+                        feature_type='normalized'
                     )
 
                     if result['success']:
@@ -699,7 +796,7 @@ def download_from_binance(symbol: str, interval: str, start_date, end_date, run_
                 st.code(traceback.format_exc())
 
 
-def run_grid_search(window_sizes, strides, min_cluster_sizes, min_samples_options, metrics, n_bars, selected_files=None, use_parallel=False, n_jobs=1):
+def run_grid_search(window_sizes, strides, min_cluster_sizes, min_samples_options, metrics, n_bars, selected_files=None, use_parallel=False, n_jobs=1, feature_type='normalized'):
     """Run grid search with multiple configurations across multiple files."""
     import time
 
@@ -827,7 +924,8 @@ def run_grid_search(window_sizes, strides, min_cluster_sizes, min_samples_option
                     process_func=process_single_config,
                     n_jobs=n_jobs,
                     verbose=10,
-                    status_file=status_file_path
+                    status_file=status_file_path,
+                    feature_type=feature_type
                 )
                 results_container['results'] = results
             except Exception as e:
@@ -994,7 +1092,8 @@ def run_grid_search(window_sizes, strides, min_cluster_sizes, min_samples_option
                     backend_module=st.session_state.backend_module,
                     storage=st.session_state.storage,
                     logger=logger,
-                    scalers_cache=scalers_cache
+                    scalers_cache=scalers_cache,
+                    feature_type=feature_type
                 )
 
                 result['data_file'] = file_display
@@ -1311,20 +1410,30 @@ def show_visualizations():
                 with col1:
                     pregen_samples = st.number_input(
                         "Samples per Cluster (for pre-generation)",
-                        1, 50, 10,
+                        1, 50,
+                        st.session_state.form_defaults['pregen_samples'],
                         key="pregen_samples",
                         help="Number of samples to generate for each cluster"
                     )
+                    if pregen_samples != st.session_state.form_defaults['pregen_samples']:
+                        st.session_state.form_defaults['pregen_samples'] = pregen_samples
+                        save_settings(st.session_state.form_defaults)
 
                 with col2:
                     import multiprocessing
                     detected_cores = multiprocessing.cpu_count()
+                    if st.session_state.form_defaults['pregen_jobs'] is None:
+                        st.session_state.form_defaults['pregen_jobs'] = min(detected_cores, 20)
                     pregen_jobs = st.number_input(
                         "CPU Cores",
-                        1, 32, min(detected_cores, 20),
+                        1, 32,
+                        st.session_state.form_defaults['pregen_jobs'],
                         key="pregen_jobs",
                         help=f"Number of CPU cores to use. Detected: {detected_cores} cores. Recommended: use all available cores for fastest generation."
                     )
+                    if pregen_jobs != st.session_state.form_defaults['pregen_jobs']:
+                        st.session_state.form_defaults['pregen_jobs'] = pregen_jobs
+                        save_settings(st.session_state.form_defaults)
 
                 with col3:
                     if st.button("Visualize Clusters", type="primary", help="Run standalone script with true parallelization"):
@@ -1439,6 +1548,494 @@ def show_visualizations():
                             st.image(str(img_path), use_container_width=True)
                         else:
                             st.warning(f"Image not found for cluster {cluster_id}")
+
+
+def show_pattern_matching():
+    """Pattern matching page - apply trained models to new data."""
+    st.markdown('<p class="main-header">\U0001F50D Pattern Matching</p>', unsafe_allow_html=True)
+
+    st.markdown("""
+    Apply a trained HDBSCAN model to new data to find matching patterns.
+    This is useful for identifying when known patterns appear in fresh market data.
+    """)
+
+    df = get_all_runs()
+
+    if df.empty:
+        st.warning("⚠️ No trained models available yet. Train a model first in 'Configure & Run'.")
+        return
+
+    tabs = st.tabs(["🎯 Apply Model", "📊 View Results", "📈 Analysis"])
+
+    # Tab 1: Apply Model
+    with tabs[0]:
+        st.subheader("Apply Trained Model to New Data")
+
+        # Model selection
+        st.markdown("### 1️⃣ Select Your Trained Model")
+
+        col1, col2 = st.columns([2, 1])
+
+        with col1:
+            # Show top models
+            st.markdown("**Top Models by Silhouette Score:**")
+            top_models = df.nlargest(5, 'silhouette_score')[
+                ['run_id', 'config_id', 'n_clusters', 'silhouette_score', 'noise_ratio']
+            ]
+            st.dataframe(top_models, hide_index=True, use_container_width=True)
+
+        with col2:
+            run_id = st.selectbox(
+                "Select Model (Run ID)",
+                sorted(df['run_id'].unique(), reverse=True),
+                help="Choose which trained model to use for pattern matching"
+            )
+
+            if run_id:
+                model_info = df[df['run_id'] == run_id].iloc[0]
+                st.metric("Clusters", model_info['n_clusters'])
+                st.metric("Silhouette", f"{model_info['silhouette_score']:.3f}")
+                st.metric("Noise Ratio", f"{model_info['noise_ratio']*100:.1f}%")
+
+        st.markdown("---")
+
+        # Data selection
+        st.markdown("### 2️⃣ Select Data to Analyze")
+
+        data_files = list(Config.DATA_DIR.glob("*.csv"))
+
+        if not data_files:
+            st.warning("⚠️ No data files found. Upload data in 'Configure & Run' → 'Data Management'")
+            return
+
+        selected_data_file = st.selectbox(
+            "Choose Data File",
+            data_files,
+            format_func=lambda x: f"{x.name} ({x.stat().st_size / (1024*1024):.1f} MB)",
+            help="Select the OHLCV data file to search for patterns"
+        )
+
+        # Preview data
+        if selected_data_file:
+            with st.expander("📊 Data Preview"):
+                try:
+                    df_preview = pd.read_csv(selected_data_file)
+                    st.write(f"**{len(df_preview):,} bars** loaded")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write("First 5 rows:")
+                        st.dataframe(df_preview.head(), use_container_width=True)
+                    with col2:
+                        st.write("Last 5 rows:")
+                        st.dataframe(df_preview.tail(), use_container_width=True)
+                except Exception as e:
+                    st.error(f"Error loading data: {e}")
+
+        st.markdown("---")
+
+        # Cluster selection
+        st.markdown("### 3️⃣ Select Clusters to Match (Optional)")
+
+        if run_id:
+            try:
+                # Load the model to see what clusters it has
+                labels_original, config = st.session_state.storage.load_labels(run_id)
+                unique_clusters = sorted([int(x) for x in set(labels_original) if x != -1])
+
+                if unique_clusters:
+                    st.markdown(f"**Model has {len(unique_clusters)} clusters:** {unique_clusters}")
+
+                    col1, col2 = st.columns([3, 1])
+
+                    with col1:
+                        selected_clusters = st.multiselect(
+                            "Select specific clusters to match (leave empty for all)",
+                            unique_clusters,
+                            help="Only search for these specific clusters. Leave empty to find all patterns."
+                        )
+
+                    with col2:
+                        if st.button("✅ Select All Clusters"):
+                            st.session_state.selected_clusters_filter = unique_clusters
+                            st.rerun()
+
+                    # Store in session state
+                    if selected_clusters:
+                        st.session_state.selected_clusters_filter = selected_clusters
+                        st.info(f"🎯 Will only match clusters: {selected_clusters}")
+                    else:
+                        st.session_state.selected_clusters_filter = None
+                        st.info("🔍 Will match all clusters")
+
+                else:
+                    st.warning("⚠️ This model has no clusters (all noise)")
+
+            except Exception as e:
+                st.warning(f"Could not load cluster info: {e}")
+
+        st.markdown("---")
+
+        # Apply button
+        st.markdown("### 4️⃣ Run Pattern Matching")
+
+        col1, col2 = st.columns([3, 1])
+
+        with col1:
+            if st.button("🔍 Find Patterns", type="primary", use_container_width=True):
+                cluster_filter = st.session_state.get('selected_clusters_filter', None)
+                run_pattern_matching(run_id, selected_data_file, cluster_filter=cluster_filter)
+
+        with col2:
+            if st.button("💾 Export Script", use_container_width=True):
+                st.code(f"""# Run from command line:
+python tools/apply_clusterer.py \\
+    --run-id {run_id} \\
+    --data {selected_data_file}
+""", language="bash")
+
+    # Tab 2: View Results
+    with tabs[1]:
+        st.subheader("Pattern Matching Results")
+
+        # Look for prediction files
+        import glob
+        prediction_files = glob.glob("predictions_*.csv")
+
+        if not prediction_files:
+            st.info("ℹ️ No prediction results yet. Run pattern matching in the 'Apply Model' tab.")
+            return
+
+        # Sort by modification time
+        prediction_files.sort(key=lambda x: Path(x).stat().st_mtime, reverse=True)
+
+        selected_prediction = st.selectbox(
+            "Select Prediction File",
+            prediction_files,
+            format_func=lambda x: f"{Path(x).name} ({datetime.fromtimestamp(Path(x).stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')})"
+        )
+
+        if selected_prediction:
+            try:
+                df_pred = pd.read_csv(selected_prediction)
+
+                # Summary metrics
+                col1, col2, col3, col4 = st.columns(4)
+
+                with col1:
+                    st.metric("Total Windows", len(df_pred))
+
+                with col2:
+                    n_clustered = len(df_pred[df_pred['cluster'] != -1])
+                    st.metric("Matched Patterns", n_clustered)
+
+                with col3:
+                    n_noise = len(df_pred[df_pred['cluster'] == -1])
+                    st.metric("Noise", n_noise)
+
+                with col4:
+                    avg_strength = df_pred[df_pred['cluster'] != -1]['strength'].mean()
+                    st.metric("Avg Strength", f"{avg_strength:.3f}")
+
+                st.markdown("---")
+
+                # Cluster distribution
+                st.markdown("### 📊 Cluster Distribution")
+                cluster_counts = df_pred[df_pred['cluster'] != -1]['cluster'].value_counts().sort_index()
+
+                if len(cluster_counts) > 0:
+                    fig = px.bar(
+                        x=cluster_counts.index,
+                        y=cluster_counts.values,
+                        labels={'x': 'Cluster ID', 'y': 'Count'},
+                        title="Pattern Matches by Cluster"
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                st.markdown("---")
+
+                # Data table with filters
+                st.markdown("### 🔍 Detailed Results")
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    cluster_filter = st.multiselect(
+                        "Filter by Cluster",
+                        sorted(df_pred['cluster'].unique()),
+                        help="Select specific clusters to view"
+                    )
+
+                with col2:
+                    min_strength = st.slider(
+                        "Min Strength",
+                        0.0, 1.0, 0.0, 0.05,
+                        help="Filter by minimum pattern match strength"
+                    )
+
+                # Apply filters
+                filtered_pred = df_pred.copy()
+                if cluster_filter:
+                    filtered_pred = filtered_pred[filtered_pred['cluster'].isin(cluster_filter)]
+                filtered_pred = filtered_pred[filtered_pred['strength'] >= min_strength]
+
+                st.dataframe(
+                    filtered_pred,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=400
+                )
+
+                # Download button
+                st.download_button(
+                    "💾 Download Full Results",
+                    df_pred.to_csv(index=False),
+                    file_name=Path(selected_prediction).name,
+                    mime="text/csv"
+                )
+
+            except Exception as e:
+                st.error(f"Error loading predictions: {e}")
+
+    # Tab 3: Analysis
+    with tabs[2]:
+        st.subheader("Pattern Analysis & Forward Testing")
+
+        # Look for prediction files
+        import glob
+        prediction_files = glob.glob("predictions_*.csv")
+
+        if not prediction_files:
+            st.info("ℹ️ No prediction results yet. Run pattern matching first.")
+            return
+
+        prediction_files.sort(key=lambda x: Path(x).stat().st_mtime, reverse=True)
+
+        selected_prediction = st.selectbox(
+            "Select Prediction File",
+            prediction_files,
+            format_func=lambda x: f"{Path(x).name}",
+            key="analysis_file"
+        )
+
+        if selected_prediction:
+            try:
+                df_pred = pd.read_csv(selected_prediction)
+
+                # Get the original data file name from predictions filename
+                # Format: predictions_runXXXX_TIMESTAMP.csv
+                st.markdown("### 🎯 Strongest Matches by Cluster")
+
+                for cluster_id in sorted(df_pred['cluster'].unique()):
+                    if cluster_id == -1:
+                        continue
+
+                    cluster_data = df_pred[df_pred['cluster'] == cluster_id]
+                    top_matches = cluster_data.nlargest(5, 'strength')
+
+                    with st.expander(f"Cluster {cluster_id} ({len(cluster_data)} matches)", expanded=False):
+                        col1, col2, col3 = st.columns(3)
+
+                        with col1:
+                            st.metric("Total Matches", len(cluster_data))
+                        with col2:
+                            st.metric("Max Strength", f"{cluster_data['strength'].max():.3f}")
+                        with col3:
+                            st.metric("Avg Strength", f"{cluster_data['strength'].mean():.3f}")
+
+                        st.markdown("**Top 5 Strongest Matches:**")
+                        st.dataframe(
+                            top_matches[['window_idx', 'timestamp', 'strength', 'close_price']],
+                            hide_index=True,
+                            use_container_width=True
+                        )
+
+                st.markdown("---")
+
+                # Time series visualization
+                st.markdown("### 📈 Pattern Occurrences Over Time")
+
+                # Create timeline plot
+                fig = px.scatter(
+                    df_pred[df_pred['cluster'] != -1],
+                    x='end_bar',
+                    y='cluster',
+                    color='strength',
+                    size='strength',
+                    hover_data=['window_idx', 'timestamp'],
+                    labels={'end_bar': 'Bar Index', 'cluster': 'Cluster ID'},
+                    title="When Patterns Appear",
+                    color_continuous_scale='Viridis'
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+            except Exception as e:
+                st.error(f"Error analyzing predictions: {e}")
+
+
+def run_pattern_matching(run_id: int, data_file: Path, cluster_filter: list = None):
+    """Execute pattern matching and display results.
+
+    Args:
+        run_id: Model run ID to use
+        data_file: Path to data file
+        cluster_filter: Optional list of cluster IDs to match. If provided, only these clusters will be reported.
+    """
+    from src.feature_engineering import FeatureExtractor
+    from sklearn.preprocessing import StandardScaler
+
+    with st.spinner("🔍 Loading model and processing data..."):
+        try:
+            # Load model
+            storage = st.session_state.storage
+            clusterer = storage.load_clusterer(run_id)
+            labels_original, config = storage.load_labels(run_id)
+
+            st.success(f"✅ Loaded model from run {run_id}")
+
+            if cluster_filter:
+                st.info(f"🎯 Filtering for clusters: {cluster_filter}")
+
+            st.info(f"Config: window_size={config['window_size']}, stride={config.get('stride', 1)}")
+
+            # Load data
+            df_new = pd.read_csv(data_file)
+            st.success(f"✅ Loaded {len(df_new):,} bars from {data_file.name}")
+
+            # Create windows
+            window_size = config['window_size']
+            stride = config.get('stride', 1)
+
+            loader = OHLCVDataLoader(df_new)
+            windows = loader.create_windows(window_size, stride=stride)
+            st.success(f"✅ Created {len(windows):,} windows")
+
+            # Extract features
+            feature_type = config.get('feature_type', 'normalized')
+            extractor = FeatureExtractor(feature_type=feature_type, flatten_order='sequential')
+            features = extractor.extract_features(windows)
+            st.success(f"✅ Extracted features (type={feature_type})")
+
+            # Normalize if needed
+            if feature_type == 'flatten':
+                scaler = StandardScaler()
+                features_normalized = scaler.fit_transform(features)
+            else:
+                features_normalized = features
+
+            # Predict
+            try:
+                # Try hdbscan.prediction.approximate_predict (separate module)
+                import hdbscan.prediction
+                predicted_labels, strengths = hdbscan.prediction.approximate_predict(clusterer, features_normalized)
+                st.success("✅ Pattern matching complete!")
+            except (AttributeError, ImportError):
+                try:
+                    # Try clusterer.approximate_predict (method)
+                    predicted_labels, strengths = clusterer.approximate_predict(features_normalized)
+                    st.success("✅ Pattern matching complete!")
+                except AttributeError:
+                    try:
+                        # Try clusterer.predict (older versions)
+                        predicted_labels = clusterer.predict(features_normalized)
+                        strengths = np.where(predicted_labels == -1, 0.0, 1.0)
+                        st.warning("⚠️ Using hard assignment (approximate_predict not available)")
+                    except AttributeError:
+                        # Fallback: use membership vectors if available
+                        st.error("❌ This clusterer doesn't support prediction. You need to train with `prediction_data=True`")
+                        return
+
+            # Apply cluster filter if specified
+            if cluster_filter:
+                # Convert non-selected clusters to noise (-1)
+                filtered_labels = predicted_labels.copy()
+                filtered_strengths = strengths.copy()
+
+                for i, label in enumerate(predicted_labels):
+                    if label != -1 and label not in cluster_filter:
+                        filtered_labels[i] = -1
+                        filtered_strengths[i] = 0.0
+
+                predicted_labels = filtered_labels
+                strengths = filtered_strengths
+
+                n_filtered = np.sum((predicted_labels == -1) & (predicted_labels != filtered_labels))
+                st.info(f"📊 Filtered out {n_filtered} matches from non-selected clusters")
+
+            # Create results
+            results = []
+            for i, (window, label, strength) in enumerate(zip(windows, predicted_labels, strengths)):
+                start_idx = i * stride
+                end_idx = start_idx + window_size - 1
+
+                if end_idx < len(df_new):
+                    timestamp = df_new.iloc[end_idx].get('Open_time', df_new.iloc[end_idx].get('timestamp', end_idx))
+
+                    results.append({
+                        'window_idx': i,
+                        'start_bar': start_idx,
+                        'end_bar': end_idx,
+                        'timestamp': timestamp,
+                        'cluster': label,
+                        'strength': strength,
+                        'close_price': window[-1, 3],
+                        'cluster_name': 'Noise' if label == -1 else f'Cluster_{label}'
+                    })
+
+            df_results = pd.DataFrame(results)
+
+            # Display summary
+            st.markdown("---")
+            st.markdown("### 📊 Results Summary")
+
+            col1, col2, col3, col4 = st.columns(4)
+
+            n_clusters = len(set(predicted_labels)) - (1 if -1 in predicted_labels else 0)
+            n_noise = np.sum(predicted_labels == -1)
+
+            with col1:
+                st.metric("Windows Analyzed", len(predicted_labels))
+            with col2:
+                st.metric("Clusters Found", n_clusters)
+            with col3:
+                st.metric("Matched Patterns", len(predicted_labels) - n_noise)
+            with col4:
+                st.metric("Noise", n_noise)
+
+            # Cluster distribution
+            st.markdown("**Distribution by Cluster:**")
+            for label in sorted(set(predicted_labels)):
+                count = np.sum(predicted_labels == label)
+                pct = count / len(predicted_labels) * 100
+                label_name = "Noise" if label == -1 else f"Cluster {label}"
+
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.progress(pct / 100, text=f"{label_name}: {count} ({pct:.1f}%)")
+                with col2:
+                    if label != -1:
+                        cluster_strengths = strengths[predicted_labels == label]
+                        st.text(f"Avg: {cluster_strengths.mean():.3f}")
+
+            # Save results
+            timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+            output_file = f"predictions_run{run_id:04d}_{timestamp_str}.csv"
+            df_results.to_csv(output_file, index=False)
+
+            st.success(f"💾 Results saved to: {output_file}")
+
+            # Download button
+            st.download_button(
+                "⬇️ Download Results CSV",
+                df_results.to_csv(index=False),
+                file_name=output_file,
+                mime="text/csv"
+            )
+
+        except Exception as e:
+            st.error(f"❌ Error during pattern matching: {e}")
+            import traceback
+            with st.expander("Show error details"):
+                st.code(traceback.format_exc())
 
 
 def show_logs():
@@ -1568,7 +2165,7 @@ def show_model_manager():
 
     sorted_df = df.sort_values(by=sort_option, ascending=ascending)
 
-    for _, row in sorted_df.iterrows():
+    for idx, row in sorted_df.iterrows():
         with st.expander(f"Run {row['run_id']} - {row['config_id']} (Silhouette: {row.get('silhouette_score', 'N/A')})"):
             col1, col2, col3 = st.columns([2, 1, 1])
 
@@ -1589,8 +2186,12 @@ def show_model_manager():
                 st.write(f"Model: {'✅' if has_model else '❌'}")
 
             with col3:
-                if st.button(f"\U0001F5D1 Delete", key=f"del_{row['run_id']}"):
-                    if st.session_state.get(f'confirm_del_{row["run_id"]}', False):
+                # Use both idx and run_id to ensure uniqueness
+                button_key = f"del_{idx}_{row['run_id']}"
+                confirm_key = f"confirm_del_{idx}_{row['run_id']}"
+
+                if st.button(f"\U0001F5D1 Delete", key=button_key):
+                    if st.session_state.get(confirm_key, False):
                         try:
                             st.session_state.storage.delete_run(row['run_id'])
                             st.success(f"Deleted run {row['run_id']}")
@@ -1598,7 +2199,7 @@ def show_model_manager():
                         except Exception as e:
                             st.error(f"Error: {e}")
                     else:
-                        st.session_state[f'confirm_del_{row["run_id"]}'] = True
+                        st.session_state[confirm_key] = True
                         st.warning("Click again to confirm deletion")
 
     # Cleanup tools

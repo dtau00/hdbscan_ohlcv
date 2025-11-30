@@ -161,7 +161,8 @@ def process_single_config(
     backend_module: Any,
     storage: ResultsStorage,
     logger: logging.Logger,
-    scalers_cache: Dict[int, StandardScaler]
+    scalers_cache: Dict[int, StandardScaler],
+    feature_type: str = 'normalized'
 ) -> Dict[str, Any]:
     """
     Process a single configuration: window creation, feature extraction,
@@ -199,24 +200,29 @@ def process_single_config(
 
         # Step 2: Extract features
         logger.debug("Extracting features...")
-        feature_extractor = FeatureExtractor(feature_type='flatten', flatten_order='sequential')
+        feature_extractor = FeatureExtractor(feature_type=feature_type, flatten_order='sequential')
         features = feature_extractor.extract_features(windows)
-        logger.info(f"  Extracted features: shape={features.shape}")
+        logger.info(f"  Extracted features: shape={features.shape} (using {feature_type} features)")
 
-        # Step 3: Normalize features
-        # Use cached scaler if available for this window_size, otherwise fit new one
-        if window_size not in scalers_cache:
-            logger.debug(f"Fitting new StandardScaler for window_size={window_size}")
-            scaler = StandardScaler()
-            features_normalized = scaler.fit_transform(features)
-            scalers_cache[window_size] = scaler
+        # Step 3: Normalize features (only needed for 'flatten' feature type)
+        # Normalized and returns features are already in comparable scales
+        if feature_type == 'flatten':
+            # Use cached scaler if available for this window_size, otherwise fit new one
+            if window_size not in scalers_cache:
+                logger.debug(f"Fitting new StandardScaler for window_size={window_size}")
+                scaler = StandardScaler()
+                features_normalized = scaler.fit_transform(features)
+                scalers_cache[window_size] = scaler
+            else:
+                logger.debug(f"Using cached StandardScaler for window_size={window_size}")
+                scaler = scalers_cache[window_size]
+                features_normalized = scaler.transform(features)
+            logger.info(f"  Standardized features: mean={features_normalized.mean():.4f}, "
+                       f"std={features_normalized.std():.4f}")
         else:
-            logger.debug(f"Using cached StandardScaler for window_size={window_size}")
-            scaler = scalers_cache[window_size]
-            features_normalized = scaler.transform(features)
-
-        logger.info(f"  Normalized features: mean={features_normalized.mean():.4f}, "
-                   f"std={features_normalized.std():.4f}")
+            # Skip StandardScaler for normalized/returns - they're already scaled
+            features_normalized = features
+            logger.info(f"  Features already scaled (type={feature_type}), skipping StandardScaler")
 
         # Step 4: Run HDBSCAN clustering
         logger.debug("Running HDBSCAN clustering...")
